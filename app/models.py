@@ -61,6 +61,7 @@ class IncomingMessage(BaseModel):
     addressed_to_bot: bool = False  # @mention or reply to one of our messages
     from_me: bool = False  # written from the owner's own account (personal-number mode)
     self_chat: bool = False  # the owner's "message yourself" chat
+    is_business: bool = False  # sender is a WhatsApp Business account
     media_b64: str | None = None
     media_mime: str | None = None
 
@@ -71,6 +72,8 @@ class ProcessResult(BaseModel):
         "dry_run",
         "duplicate",
         "ignored_unknown_sender",
+        "ignored_blocked",
+        "ignored_business",
         "ignored_empty",
         "skipped_greeting_only",
         "skipped_manual_pause",

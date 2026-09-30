@@ -118,6 +118,7 @@ async function forward(m) {
     addressed_to_bot: Boolean(addressed),
     from_me: Boolean(key.fromMe),
     self_chat: selfChat,
+    is_business: Boolean(m.verifiedBizName),
     kind,
     text: textOf(content),
     caption: content.imageMessage?.caption || null,

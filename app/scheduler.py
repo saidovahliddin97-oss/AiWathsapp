@@ -31,7 +31,8 @@ def due_relatives(assistant: "Assistant", now: float | None = None, force_all: b
         assistant.store.set_kv("greetings_baseline", baseline)
     due = []
     for rel in assistant.store.list_relatives():
-        if rel.relation == "family_group" or assistant.paused(rel.id):
+        # greetings go only to people you listed, never to auto-added contacts or groups
+        if rel.relation in ("family_group", "contact") or assistant.paused(rel.id) or assistant.blocked(rel.phone):
             continue
         if force_all:
             due.append(rel.id)

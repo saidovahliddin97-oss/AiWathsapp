@@ -6,7 +6,8 @@ from typing import Any
 
 from app.models import Fact, IncomingMessage, Mode, Relative, StoredMessage
 
-SYSTEM_PROMPT = """You are a WhatsApp family communication assistant.
+SYSTEM_PROMPT = """You are a WhatsApp communication assistant for the User's relatives, friends
+and other personal contacts.
 
 Your task is to generate natural WhatsApp messages on behalf of the User.
 
@@ -88,6 +89,8 @@ RELATION_HINTS = {
     "brother": "бародар (older: ака + Шумо; younger: ту is fine)",
     "friend": "дӯст (usually ту)",
     "family_group": "family group chat: reply to group_speaker, short; use Шумо for elders",
+    "contact": "relationship unknown (not in the family list): be polite and neutral, use Шумо "
+    "unless they write informally, do not assume family ties or shared history",
 }
 
 

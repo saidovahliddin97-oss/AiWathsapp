@@ -18,6 +18,9 @@ if TYPE_CHECKING:
 HELP = """Команды:
 /статус — состояние бота
 /список — контакты и режимы
+/блок <имя или номер> — бот никогда не отвечает этому человеку
+/разблок <имя или номер> — снова отвечать;  /блоклист — кто заблокирован
+/всем вкл | выкл — отвечать всем в личных чатах / только людям из списка
 /добавить <номер> <кто> <обращение> — пример: /добавить 992901234567 мама Модарҷон
 /удалить <имя> — убрать контакт
 /авто вкл <имя> — бот переписывается с человеком
@@ -58,6 +61,10 @@ ALIASES = {
     "add": "add", "добавить": "add", "илова": "add",
     "remove": "remove", "удалить": "remove",
     "groups": "groups", "группы": "groups",
+    "block": "block", "блок": "block", "заблокировать": "block",
+    "unblock": "unblock", "разблок": "unblock", "разблокировать": "unblock",
+    "blocklist": "blocklist", "блоклист": "blocklist", "заблокированные": "blocklist",
+    "all": "all", "всем": "all",
     "why": "why", "почему": "why", "лог": "why", "журнал": "why",
     "group": "group", "группа": "group",
     "resume": "resume", "старт": "resume", "продолжить": "resume",
@@ -89,7 +96,10 @@ async def handle_command(assistant: "Assistant", text: str) -> str | None:
         rels = [r for r in store.list_relatives() if r.relation != "family_group"]
         full = sum(r.mode is Mode.FULL_CHAT for r in rels)
         groups_on = sum(v == "1" for v in store.kv_prefix("group_on:").values())
+        blocked = sum(v == "1" for v in store.kv_prefix("block:").values())
+        who = "всем в личных чатах" if assistant.reply_all() else "только людям из списка"
         return (
+            f"Отвечает: {who}. Заблокировано: {blocked}\n"
             f"Переписывается: {full} из {len(rels)} контактов (остальным только приветствия)\n"
             f"Группы, где бот может отвечать: {groups_on}\n"
             f"Приветствия по расписанию: {'вкл' if store.get_flag('greetings', assistant.settings.greetings_enabled) else 'выкл'}\n"
@@ -99,12 +109,14 @@ async def handle_command(assistant: "Assistant", text: str) -> str | None:
         )
 
     if cmd == "list":
+        others = sum(r.relation == "contact" for r in store.list_relatives())
         rows = [
             f"• {r.address or r.name} ({r.id}) — {'общение' if r.mode is Mode.FULL_CHAT else 'только привет'}"
             for r in store.list_relatives()
-            if r.relation != "family_group"
+            if r.relation not in ("family_group", "contact")
         ]
-        return "\n".join(rows) or "Список пуст — заполните config/relatives.json"
+        tail = f"\n+ ещё {others} собеседников, которым бот отвечает автоматически" if others else ""
+        return ("\n".join(rows) or "Список пуст") + tail
 
     if cmd == "auto":
         if not args or _onoff(args[0]) is None:
@@ -158,6 +170,42 @@ async def handle_command(assistant: "Assistant", text: str) -> str | None:
 
     if cmd == "why":
         return _why(assistant)
+
+    if cmd in ("block", "unblock"):
+        query = " ".join(args).strip()
+        if not query:
+            return "Пример: /блок 992901234567  или  /блок Али"
+        phone = normalize_phone(query)
+        rel = None
+        if len(phone) < 8:
+            rel = store.find_relative_by_name(query)
+            if rel is None:
+                return "Не нашёл такого человека. Укажите номер: /блок 992901234567"
+            phone = rel.phone
+        store.set_flag(f"block:{phone}", cmd == "block")
+        name = (rel.address or rel.name) if rel else f"+{phone}"
+        return (f"{name}: заблокирован — бот ему не отвечает." if cmd == "block"
+                else f"{name}: разблокирован — бот снова отвечает.")
+
+    if cmd == "blocklist":
+        phones = [p for p, v in store.kv_prefix("block:").items() if v == "1"]
+        if not phones:
+            return "Никто не заблокирован."
+        names = []
+        for ph in phones:
+            rel = store.find_relative_by_phone(ph)
+            names.append(f"• {(rel.address or rel.name) if rel else ''} +{ph}".replace("•  ", "• "))
+        return "Заблокированы:\n" + "\n".join(names)
+
+    if cmd == "all":
+        on = _onoff(args[0]) if args else None
+        if on is None:
+            return "Пример: /всем вкл"
+        store.set_flag("reply_all", on)
+        if on:
+            store.set_kv("default_mode", Mode.FULL_CHAT.value)
+            return "Бот отвечает всем в личных чатах, кроме заблокированных (/блок) и бизнес-аккаунтов."
+        return "Бот отвечает только людям из списка (/список, /добавить)."
 
     if cmd == "add":
         return _add(assistant, args)
@@ -240,6 +288,10 @@ def _why(assistant: "Assistant") -> str:
         st, who, d = it["status"], it["who"], it.get("detail", "")
         if st in ("sent", "dry_run"):
             why = f"ответил: «{it.get('reply', '')}»" + (" (тестовый режим DRY_RUN — в WhatsApp не ушло)" if st == "dry_run" else "")
+        elif st == "ignored_blocked":
+            why = "заблокирован (/разблок, чтобы снова отвечать)"
+        elif st == "ignored_business":
+            why = f"бизнес-аккаунт ({d}) — таким бот не отвечает. Если нужно: /добавить <номер> друг Имя"
         elif st == "ignored_unknown_sender":
             num = d.split()[0].lstrip("+") if d else "номер"
             why = f"его нет в списке ({d}). Добавить: /добавить {num} друг Имя"

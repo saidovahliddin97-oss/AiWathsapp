@@ -67,6 +67,7 @@ def settings():
         dry_run=True,
         database_path=":memory:",
         allow_offline_generator=False,
+        reply_to_everyone=False,  # most tests cover the "relatives list only" mode
     )
 
 

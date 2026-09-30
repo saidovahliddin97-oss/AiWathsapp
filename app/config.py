@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     personal_number: bool = False
     # forward messages the bot does not answer (greeting-only / autopilot off) to you
     forward_unanswered: bool = True
+    # Reply to everyone in private chats (except /блок), not only to the relatives list
+    reply_to_everyone: bool = True
+    # Never auto-reply to WhatsApp Business accounts (banks, shops, delivery) unless listed
+    skip_business: bool = True
     manual_pause_minutes: int = 120  # after you reply yourself, the bot keeps quiet in that chat
 
     # Scheduled greetings (GREETING_ONLY)

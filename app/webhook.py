@@ -65,6 +65,7 @@ class Assistant:
         self.sender = sender
         self.media_source = media_source
         self.transcriber = transcriber or NullTranscriber()
+        self._new_contact: Relative | None = None
         self._migrate_flags()
 
     # ----------------------------------------------------------------- helpers
@@ -81,12 +82,29 @@ class Assistant:
     def _log(self, level: int, msg: str, **fields) -> None:
         log.log(level, "%s %s", msg, _fmt(**fields))
 
+    def reply_all(self) -> bool:
+        return self.store.get_flag("reply_all", self.settings.reply_to_everyone)
+
+    def blocked(self, phone: str) -> bool:
+        return self.store.get_flag(f"block:{normalize_phone(phone)}", False)
+
     def _resolve_relative(self, msg: IncomingMessage) -> Relative | None:
         rel = self.store.find_relative_by_phone(msg.phone)
-        if rel or self.settings.ignore_unknown_senders:
+        if rel or not (self.reply_all() or not self.settings.ignore_unknown_senders):
             return rel
-        rel = Relative(id=f"wa_{msg.phone}", phone=msg.phone, name=msg.profile_name or "Дӯст", relation="friend")
+        phone = normalize_phone(msg.phone)
+        if len(phone) < 6:
+            return None
+        rel = Relative(
+            id=f"c_{phone}",
+            phone=phone,
+            name=msg.profile_name or f"+{phone}",
+            relation="contact",
+            mode=Mode.FULL_CHAT,
+            notes=["Not in the User's family list: relationship unknown."],
+        )
         self.store.upsert_relative(rel)
+        self._new_contact = rel
         return rel
 
     async def _media_context(self, msg: IncomingMessage) -> tuple[str, str | None]:
@@ -194,6 +212,11 @@ class Assistant:
             self.store.set_all_modes(Mode.GREETING_ONLY)
             self.store.set_kv("default_mode", Mode.GREETING_ONLY.value)
         self.store.set_kv("autopilot", "1")
+        # "Reply to everyone" (owner's request): switch everybody to full chat once.
+        if self.reply_all() and self.store.get_kv("reply_all_migrated") is None:
+            self.store.set_all_modes(Mode.FULL_CHAT)
+            self.store.set_kv("default_mode", Mode.FULL_CHAT.value)
+            self.store.set_kv("reply_all_migrated", "1")
 
     def group_enabled(self, chat_id: str | None) -> bool:
         return bool(chat_id) and self.store.get_flag(f"group_on:{chat_id}", False)
@@ -285,7 +308,13 @@ class Assistant:
             self.store.finish_event(event_id, "ignored")
             return ProcessResult(status="group_not_addressed", detail="group disabled")
         if msg.from_me:
-            rel = self._group_entity(msg) if msg.is_group else self.store.find_relative_by_phone(msg.phone)
+            if msg.is_group:
+                rel = self._group_entity(msg)
+            elif self.blocked(msg.phone):
+                rel = None
+            else:  # you wrote to someone yourself: remember it and let the bot keep quiet there
+                rel = self._resolve_relative(msg)
+                self._new_contact = None
             self.store.finish_event(event_id, "done")
             if rel is None or not msg.text.strip():
                 return ProcessResult(status="owner_message_recorded")
@@ -294,11 +323,24 @@ class Assistant:
             return ProcessResult(status="owner_message_recorded", relative_id=rel.id)
 
         # 2. Who is talking
+        if not msg.is_group and self.blocked(msg.phone):
+            self.store.finish_event(event_id, "ignored")
+            return ProcessResult(status="ignored_blocked", detail=f"+{normalize_phone(msg.phone)}")
         speaker: Relative | None = self.store.find_relative_by_phone(msg.phone)
+        if not msg.is_group and speaker is None and msg.is_business and self.settings.skip_business:
+            self.store.finish_event(event_id, "ignored")
+            return ProcessResult(status="ignored_business", detail=f"+{normalize_phone(msg.phone)} {msg.profile_name or ''}".strip())
+        self._new_contact = None
         if msg.is_group:
             rel = self._group_entity(msg)
         else:
             rel = self._resolve_relative(msg)
+            if self._new_contact is not None:
+                phone = normalize_phone(msg.phone)
+                await self.notify_owner(
+                    f"🆕 Бот начал отвечать новому собеседнику: {self._new_contact.name} (+{phone}).\n"
+                    f"Если ему не нужно отвечать: /блок {phone}"
+                )
             if rel is None:
                 self.store.finish_event(event_id, "ignored")
                 await self._notify_unknown(msg)

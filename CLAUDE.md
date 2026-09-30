@@ -19,6 +19,8 @@ not a developer: explain in Russian, short, and do the work yourself.
 - Tests: `.venv/bin/python -m pytest -q`
 - WhatsApp commands (owner writes to the chat with themself): `/статус`, `/список`, `/добавить <номер> <кто> <обращение>`,
   `/удалить <имя>`, `/авто вкл|выкл [имя]`, `/группы`, `/группа вкл|выкл <название>`, `/привет имя|всем`, `/пауза N`, `/старт`, `/почему` (explains the last decisions).
+- By default the bot replies to EVERYONE in private chats except `/блок` and WhatsApp Business
+  accounts (`REPLY_TO_EVERYONE`, `/всем вкл|выкл`); unknown people become `contact` relatives.
 - Groups are ignored unless enabled with `/группа вкл`. Modes set by commands persist across restarts.
 
 - LLM: `LLM_PROVIDER=auto` picks Claude > OpenRouter (free models, `OPENROUTER_MODEL=auto`) > Gemini.

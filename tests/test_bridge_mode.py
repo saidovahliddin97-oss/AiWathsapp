@@ -281,3 +281,54 @@ async def test_retryable_failure_notifies_owner(personal, store):
 async def test_command_with_question_mark(personal, store):
     a = make_assistant(personal, store, FakeGenerator())
     assert "ещё не получил" in (await a.process(owner_cmd("/почему?", "c1"))).reply
+
+
+@pytest.fixture
+def everyone(personal):
+    personal.reply_to_everyone = True
+    return personal
+
+
+async def test_reply_to_everyone_except_blocked(everyone, store):
+    sender = DryRunSender()
+    gen = FakeGenerator(["Ваалейкум ассалом!"])
+    store.set_relative_mode("aunt", Mode.GREETING_ONLY)
+    a = make_assistant(everyone, store, gen, sender)
+    # enabling "reply to everyone" switches everybody to full chat once
+    assert store.get_relative("aunt").mode is Mode.FULL_CHAT
+    r = await a.process(IncomingMessage(message_id="s1", phone="79190000001", text="Салом", profile_name="Али"))
+    assert r.status == "dry_run" and sender.sent[-1] == ("79190000001", "Ваалейкум ассалом!")
+    assert any(t.startswith("🆕") and "/блок 79190000001" in t for to, t in sender.sent if to == "me")
+    ctx = gen.calls[-1][0]
+    assert ctx["relative"]["relation"] == "contact" and "polite" in ctx["relative"]["relation_hint"]
+    # second message: no second "new contact" notice
+    await a.process(IncomingMessage(message_id="s2", phone="79190000001", text="Чӣ хел?", profile_name="Али"))
+    assert len([t for to, t in sender.sent if t.startswith("🆕")]) == 1
+    # block by name, then by number
+    assert "заблокирован" in (await a.process(owner_cmd("/блок Али", "c1"))).reply
+    assert (await a.process(IncomingMessage(message_id="s3", phone="79190000001", text="Алло"))).status == "ignored_blocked"
+    await a.process(owner_cmd("/блок +7 919 000 00 02", "c2"))
+    assert (await a.process(IncomingMessage(message_id="s4", phone="79190000002", text="Hi"))).status == "ignored_blocked"
+    assert "+79190000002" in (await a.process(owner_cmd("/блоклист", "c3"))).reply
+    await a.process(owner_cmd("/разблок Али", "c4"))
+    assert (await a.process(IncomingMessage(message_id="s5", phone="79190000001", text="Салом"))).status == "dry_run"
+    assert "всем в личных чатах" in (await a.process(owner_cmd("/статус", "c5"))).reply
+    assert "ещё 1 собеседников" in (await a.process(owner_cmd("/список", "c6"))).reply
+
+
+async def test_business_and_manual_pause_for_strangers(everyone, store):
+    gen = FakeGenerator(["Салом!"])
+    a = make_assistant(everyone, store, gen)
+    r = await a.process(IncomingMessage(message_id="b1", phone="74950000000", text="Ваш заказ", is_business=True))
+    assert r.status == "ignored_business" and gen.calls == []
+    # you wrote to a stranger yourself -> the bot stays quiet in that chat
+    await a.process(IncomingMessage(message_id="o1", phone="79190000003", text="Привет!", from_me=True))
+    r = await a.process(IncomingMessage(message_id="s1", phone="79190000003", text="Привет, как ты?"))
+    assert r.status == "skipped_manual_pause"
+
+
+async def test_reply_all_toggle(everyone, store):
+    a = make_assistant(everyone, store, FakeGenerator())
+    await a.process(owner_cmd("/всем выкл", "c1"))
+    r = await a.process(IncomingMessage(message_id="s1", phone="79190000009", text="Салом"))
+    assert r.status == "ignored_unknown_sender"

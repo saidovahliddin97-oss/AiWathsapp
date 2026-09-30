@@ -161,6 +161,7 @@ class BridgeMessage(BaseModel):
     addressed_to_bot: bool = False
     from_me: bool = False
     self_chat: bool = False
+    is_business: bool = False
     kind: str = "text"
     text: str = ""
     caption: str | None = None
