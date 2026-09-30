@@ -1,6 +1,16 @@
 #!/bin/bash
 # Family Assistant — запуск на Mac. Двойной клик (или: bash start.command в Терминале).
-cd "$(dirname "$0")" || exit 1
+SELF="$(readlink "$0" 2>/dev/null || echo "$0")"
+cd "$(dirname "$SELF")" || exit 1
+
+# Автообновление: при каждом запуске подтягиваем последнюю версию (настройки не трогаются)
+if [ -z "${FB_UPDATED:-}" ] && [ "${AUTO_UPDATE:-true}" != "false" ] && [ -f update.sh ]; then
+  if bash update.sh "$PWD" >/dev/null 2>&1; then
+    FB_UPDATED=1 exec bash "$PWD/start.command"
+  else
+    echo "(не удалось проверить обновления — запускаю текущую версию)"
+  fi
+fi
 say_step() { printf "\n\033[1;32m▶ %s\033[0m\n" "$1"; }
 fail() { printf "\n\033[1;31m✖ %s\033[0m\n" "$1"; read -r -p "Нажмите Enter, чтобы закрыть"; exit 1; }
 
