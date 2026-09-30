@@ -27,7 +27,8 @@ HELP = """Команды:
 /группа вкл | выкл <название> — разрешить боту отвечать в группе
 /привет <имя> | всем — отправить приветствие сейчас
 /рассылка вкл | выкл — приветствия по расписанию
-/пауза <часы> — бот молчит N часов;  /старт — снять паузу"""
+/пауза <часы> — бот молчит N часов;  /старт — снять все паузы
+/почему — что бот сделал с последними сообщениями и почему"""
 
 # who -> (relation, age group). Words in Russian and Tajik.
 RELATIONS = {
@@ -57,6 +58,7 @@ ALIASES = {
     "add": "add", "добавить": "add", "илова": "add",
     "remove": "remove", "удалить": "remove",
     "groups": "groups", "группы": "groups",
+    "why": "why", "почему": "why", "лог": "why", "журнал": "why",
     "group": "group", "группа": "group",
     "resume": "resume", "старт": "resume", "продолжить": "resume",
 }
@@ -150,7 +152,12 @@ async def handle_command(assistant: "Assistant", text: str) -> str | None:
 
     if cmd == "resume":
         store.set_kv("pause_all_until", "0")
-        return "Пауза снята."
+        for rel_id in store.kv_prefix("manual:"):
+            store.set_kv(f"manual:{rel_id}", "0")
+        return "Паузы сняты — бот снова отвечает во всех включённых чатах."
+
+    if cmd == "why":
+        return _why(assistant)
 
     if cmd == "add":
         return _add(assistant, args)
@@ -214,3 +221,45 @@ def _add(assistant: "Assistant", args: list[str]) -> str:
     assistant.store.upsert_relative(rel)
     mode = "переписывается" if rel.mode is Mode.FULL_CHAT else "только приветствия (включить: /авто вкл " + address + ")"
     return f"{'Обновил' if existing else 'Добавил'}: {address} (+{phone}, {relation}, {age}). Режим: {mode}."
+
+
+def _why(assistant: "Assistant") -> str:
+    import json
+
+    try:
+        items = json.loads(assistant.store.get_kv("journal", "[]"))
+    except ValueError:
+        items = []
+    if not items:
+        return ("Бот ещё не получил ни одного сообщения от других людей.\n"
+                "Если вам писали, а здесь пусто — сообщение не дошло до бота: проверьте, что окно бота на Mac открыто.")
+    pause_min = assistant.settings.manual_pause_minutes
+    lines = []
+    for it in items[-5:]:
+        when = time.strftime("%H:%M", time.localtime(it["t"]))
+        st, who, d = it["status"], it["who"], it.get("detail", "")
+        if st in ("sent", "dry_run"):
+            why = f"ответил: «{it.get('reply', '')}»" + (" (тестовый режим DRY_RUN — в WhatsApp не ушло)" if st == "dry_run" else "")
+        elif st == "ignored_unknown_sender":
+            num = d.split()[0].lstrip("+") if d else "номер"
+            why = f"его нет в списке ({d}). Добавить: /добавить {num} друг Имя"
+        elif st == "skipped_greeting_only":
+            why = f"режим «только приветствия». Включить переписку: /авто вкл {who}"
+        elif st == "skipped_manual_pause":
+            why = f"вы недавно писали этому человеку сами — бот молчит {pause_min} мин. Снять: /старт"
+        elif st == "group_not_addressed":
+            why = "в группе обращались не к вам"
+        elif st == "ignored_empty":
+            why = "пустое сообщение"
+        elif st == "generation_failed":
+            why = f"ошибка модели: {d}"
+        elif st == "validation_failed":
+            why = f"ответ модели не прошёл проверку ({d})"
+        elif st == "send_failed_queued":
+            why = f"не удалось отправить в WhatsApp, повторю позже ({d})"
+        elif st == "owner_message_recorded":
+            why = "это вы написали сами — бот запомнил и пока молчит в этом чате"
+        else:
+            why = f"{st} {d}"
+        lines.append(f"{when} {who}: {why}")
+    return "Последние сообщения:\n" + "\n".join(lines)

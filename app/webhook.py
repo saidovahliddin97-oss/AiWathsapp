@@ -5,6 +5,7 @@ Kept independent from FastAPI so it can be unit-tested directly.
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -218,6 +219,20 @@ class Assistant:
             self.store.upsert_relative(rel)
         return rel
 
+    def _journal(self, msg: IncomingMessage, result: ProcessResult) -> None:
+        """Keep the last few decisions so the owner can ask /почему."""
+        if result.status in ("owner_command", "duplicate") or (msg.is_group and result.detail == "group disabled"):
+            return
+        rel = self.store.get_relative(result.relative_id) if result.relative_id else None
+        who = (rel.address or rel.name) if rel else (msg.profile_name or f"+{normalize_phone(msg.phone)}")
+        entry = {"t": time.time(), "who": who, "rel": result.relative_id, "status": result.status,
+                 "detail": (result.detail or "")[:200], "reply": (result.reply or "")[:120], "text": msg.text[:60]}
+        try:
+            items = json.loads(self.store.get_kv("journal", "[]"))
+        except ValueError:
+            items = []
+        self.store.set_kv("journal", json.dumps((items + [entry])[-10:], ensure_ascii=False))
+
     def _addresses_owner(self, text: str) -> bool:
         low = text.lower()
         return any(re.search(rf"(?<!\w){re.escape(n.lower())}", low) for n in self.settings.owner_name_list)
@@ -237,6 +252,7 @@ class Assistant:
             self._log(logging.ERROR, "unexpected error", event_id=event_id)
             log.exception("pipeline crashed")
             raise
+        self._journal(msg, result)
         self._log(
             logging.INFO,
             "processed",
@@ -284,7 +300,10 @@ class Assistant:
             if rel is None:
                 self.store.finish_event(event_id, "ignored")
                 await self._notify_unknown(msg)
-                return ProcessResult(status="ignored_unknown_sender")
+                return ProcessResult(
+                    status="ignored_unknown_sender",
+                    detail=f"+{normalize_phone(msg.phone)} {msg.profile_name or ''}".strip(),
+                )
 
         text, media_note = await self._media_context(msg)
         if not text and not media_note:
@@ -347,8 +366,7 @@ class Assistant:
         except GenerationError as e:
             self.store.finish_event(event_id, "retryable" if e.retryable else "failed")
             self._log(logging.ERROR, "generation failed", event_id=event_id, relative=rel.id, error=e)
-            if not e.retryable:
-                await self.notify_owner(f"❗ Не смог ответить ({who_name}): {text[:300]}\nОтветьте сами.")
+            await self.notify_owner(f"❗ Не смог ответить ({who_name}): {text[:300]}\nПричина: {e}\nОтветьте сами.")
             return ProcessResult(status="generation_failed", relative_id=rel.id, mode=mode, detail=str(e))
         if reply is None:
             self.store.finish_event(event_id, "failed")
@@ -377,7 +395,11 @@ class Assistant:
             return
         self.store.set_kv(key, str(time.time()))
         name = msg.profile_name or ""
-        await self.notify_owner(f"👤 Незнакомый номер +{normalize_phone(msg.phone)} {name}: {(msg.text or '')[:300]}")
+        phone = normalize_phone(msg.phone)
+        await self.notify_owner(
+            f"👤 Пишет номер, которого нет в списке: +{phone} {name}\n«{(msg.text or '')[:300]}»\n"
+            f"Чтобы бот ему отвечал: /добавить {phone} друг {name or 'Имя'}"
+        )
 
     async def greet(self, relative_id: str) -> ProcessResult:
         """Send one proactive GREETING_ONLY message (e.g. from a scheduler)."""

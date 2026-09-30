@@ -252,3 +252,27 @@ async def test_bridge_sender():
     with pytest.raises(WhatsAppError) as ei:
         await down.send_text("1", "x")
     assert ei.value.retryable
+
+
+async def test_why_explains_decisions(personal, store):
+    sender = DryRunSender()
+    a = make_assistant(personal, store, FakeGenerator(["Салом, Модарҷон!"]), sender)
+    assert "ещё не получил" in (await a.process(owner_cmd("/почему", "c0"))).reply
+    await a.process(IncomingMessage(message_id="u1", phone="992905555555", text="Салом", profile_name="Али"))
+    assert "/добавить 992905555555 друг Али" in sender.sent[-1][1]
+    await a.process(IncomingMessage(message_id="o1", phone=MOM, text="Салом модар", from_me=True))
+    await a.process(IncomingMessage(message_id="m1", phone=MOM, text="Салом"))
+    await a.process(IncomingMessage(message_id="z1", phone="992900000003", text="Салом"))
+    why = (await a.process(owner_cmd("/почему", "c1"))).reply
+    assert "Али: его нет в списке" in why and "/добавить 992905555555" in why
+    assert "вы недавно писали" in why and "только приветствия" in why
+    await a.process(owner_cmd("/старт", "c2"))
+    assert (await a.process(IncomingMessage(message_id="m2", phone=MOM, text="Салом"))).status == "dry_run"
+    assert "ответил" in (await a.process(owner_cmd("/почему", "c3"))).reply
+
+
+async def test_retryable_failure_notifies_owner(personal, store):
+    sender = DryRunSender()
+    a = make_assistant(personal, store, FakeGenerator(error=GenerationError("Gemini API error 429", retryable=True)), sender)
+    await a.process(IncomingMessage(message_id="m1", phone=MOM, text="Салом"))
+    assert any("429" in t for to, t in sender.sent if to == "me")
