@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Family Assistant — демо</title>
+<style>
+:root{--bg:#efeae2;--panel:#fff;--side:#f7f8fa;--ink:#111b21;--muted:#667781;--in:#fff;--out:#d9fdd3;--accent:#00a884;--line:#e9edef;--warn:#b54708}
+*{box-sizing:border-box}body{margin:0;font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--ink);background:#d1d7db;height:100vh}
+.app{display:grid;grid-template-columns:300px 1fr 300px;height:100vh;max-width:1400px;margin:0 auto;background:var(--panel)}
+aside{background:var(--side);border-right:1px solid var(--line);overflow:auto}
+header.h{padding:14px 16px;border-bottom:1px solid var(--line);font-weight:600;display:flex;justify-content:space-between;align-items:center}
+.badge{font-size:11px;padding:2px 8px;border-radius:10px;background:#e7f8f3;color:#067a5f;font-weight:500}
+.badge.warn{background:#fff4e5;color:var(--warn)}
+.rel{padding:12px 16px;border-bottom:1px solid var(--line);cursor:pointer}
+.rel:hover,.rel.active{background:#e9edef}.rel small{color:var(--muted);display:block}
+main{display:flex;flex-direction:column;background:var(--bg);min-width:0}
+.chat{flex:1;overflow:auto;padding:20px 6%}
+.b{max-width:70%;padding:7px 10px 8px;border-radius:8px;margin:4px 0;box-shadow:0 1px .5px rgba(0,0,0,.13);white-space:pre-wrap;word-wrap:break-word}
+.b.relative{background:var(--in)}.b.assistant{background:var(--out);margin-left:auto}
+.b .k{font-size:11px;color:var(--muted);display:block;margin-bottom:2px}
+.sys{text-align:center;font-size:12px;color:var(--muted);margin:10px 0}
+.sys span{background:#fff8;padding:3px 10px;border-radius:6px}
+form{display:flex;gap:8px;padding:10px 14px;background:#f0f2f5}
+input,button{font:inherit}
+form input{flex:1;padding:10px 14px;border:0;border-radius:8px}
+button{border:0;border-radius:8px;padding:9px 14px;background:var(--accent);color:#fff;cursor:pointer}
+button.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
+button:disabled{opacity:.5}
+.info{padding:14px 16px;font-size:13px}.info h4{margin:14px 0 6px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.info li{margin:4px 0}.muted{color:var(--muted)}
+.quick{display:flex;flex-wrap:wrap;gap:6px;padding:0 14px 10px;background:#f0f2f5}
+.quick button{background:#fff;color:var(--ink);border:1px solid var(--line);font-size:12px;padding:5px 9px;border-radius:14px}
+@media (max-width:900px){.app{grid-template-columns:1fr}aside{max-height:30vh}#right{display:none}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <header class="h">Родственники <span id="mode" class="badge">…</span></header>
+    <div id="rels"></div>
+    <div class="info"><label class="muted">Admin token (если задан)<br><input id="tok" style="width:100%;padding:6px;border:1px solid var(--line);border-radius:6px"></label></div>
+  </aside>
+  <main>
+    <header class="h" style="background:#f0f2f5"><span id="title">Выберите родственника</span>
+      <button class="ghost" id="greet" disabled>Отправить приветствие (GREETING_ONLY)</button></header>
+    <div class="chat" id="chat"></div>
+    <div class="quick" id="quick"></div>
+    <form id="f"><input id="msg" placeholder="Напишите сообщение от имени родственника…" autocomplete="off"><button id="send" disabled>Отправить</button></form>
+  </main>
+  <aside id="right" style="border-left:1px solid var(--line);border-right:0">
+    <header class="h">Память и контекст</header>
+    <div class="info" id="side"><p class="muted">Здесь видно, что знает система: подтверждённые факты и кандидаты в долгосрочную память.</p></div>
+  </aside>
+</div>
+<script>
+const $=s=>document.querySelector(s);let cur=null,state=null;
+const tokEl=$('#tok');try{tokEl.value=localStorage.getItem('tok')||''}catch(e){}
+tokEl.onchange=()=>{try{localStorage.setItem('tok',tokEl.value)}catch(e){};load()};
+const api=(p,o={})=>fetch(p,{...o,headers:{'Content-Type':'application/json','X-Admin-Token':tokEl.value,...(o.headers||{})}}).then(async r=>{if(!r.ok)throw new Error((await r.json()).detail||r.status);return r.json()});
+const QUICK=["Ассалому алейкум, писарам! Чӣ хел ҳастӣ?","Ту ба хона расидӣ?","Кай ба Душанбе меоӣ?","Хабари хуш! Нигина ба донишгоҳ дохил шуд!","Бобоят каме бемор шуд, дар беморхона аст.","Шумо дар куҷо ҳастед ҳозир?","ок","Ҳа-ҳа, ту ҳамеша ҳамин хел мегӯӣ 😄"];
+function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+async function load(){try{state=await api('/demo/api/state')}catch(e){$('#rels').innerHTML='<p class="info" style="color:var(--warn)">'+esc(e.message)+'</p>';return}
+ const h=state.health;$('#mode').textContent='Claude: '+h.claude+' · WA: '+h.whatsapp;$('#mode').className='badge'+(h.claude==='api'?'':' warn');
+ $('#rels').innerHTML=state.relatives.map(r=>`<div class="rel${cur&&cur.id===r.id?' active':''}" data-id="${r.id}"><b>${esc(r.address||r.name)}</b><small>${r.relation} · ${r.age_group} · ${r.mode}</small></div>`).join('');
+ document.querySelectorAll('.rel').forEach(el=>el.onclick=()=>select(el.dataset.id));
+ $('#quick').innerHTML=QUICK.map(q=>`<button type="button">${esc(q)}</button>`).join('');
+ document.querySelectorAll('#quick button').forEach(b=>b.onclick=()=>{$('#msg').value=b.textContent;$('#f').requestSubmit()});}
+async function select(id){cur=state.relatives.find(r=>r.id===id);$('#title').textContent=(cur.address||cur.name)+' — '+cur.relation;$('#send').disabled=$('#greet').disabled=false;load();render()}
+async function render(extra){if(!cur)return;const d=await api('/demo/api/history/'+cur.id);
+ $('#chat').innerHTML=d.messages.map(m=>`<div class="b ${m.sender}"><span class="k">${m.sender==='relative'?esc(cur.address||cur.name):'Вы (ассистент)'}${m.kind==='greeting'?' · приветствие':''}</span>${esc(m.text)}</div>`).join('')+(extra||'');
+ $('#chat').scrollTop=1e9;
+ const cands=(state.candidates||[]).filter(c=>c.relative_id===cur.id);
+ $('#side').innerHTML=`<h4>Подтверждённые факты</h4><ul>${d.facts.map(f=>`<li>${esc(f.fact)} <span class="muted">(${f.source}, ${f.confidence})</span></li>`).join('')||'<li class="muted">нет</li>'}</ul>
+ <h4>Кандидаты в память</h4><ul>${cands.map(c=>`<li>[${c.reason}] ${esc(c.text)} <button class="ghost" style="padding:2px 8px;font-size:12px" onclick="approve(${c.id})">✓ запомнить</button></li>`).join('')||'<li class="muted">нет</li>'}</ul>
+ <h4>Правила</h4><ul class="muted"><li>Факты о пользователе не выдумываются</li><li>Ответ проходит validation перед отправкой</li><li>Демо никогда не отправляет реальные WhatsApp‑сообщения</li></ul>`;}
+async function approve(id){await api('/admin/fact-candidates/'+id,{method:'POST',body:JSON.stringify({approve:true})});await load();render()}
+function note(r){const s=r.status;return `<div class="sys"><span>${s}${r.mode?' · '+r.mode:''}${r.detail?' · '+esc(String(r.detail)):''}</span></div>`}
+$('#f').onsubmit=async e=>{e.preventDefault();const t=$('#msg').value.trim();if(!t||!cur)return;$('#msg').value='';$('#send').disabled=true;
+ try{const r=await api('/demo/api/message',{method:'POST',body:JSON.stringify({relative_id:cur.id,text:t})});await load();await render(note(r))}catch(err){alert(err.message)}finally{$('#send').disabled=false}};
+$('#greet').onclick=async()=>{$('#greet').disabled=true;try{const r=await api('/demo/api/greet/'+cur.id,{method:'POST'});await render(note(r))}finally{$('#greet').disabled=false}};
+load();
+</script>
+</body>
+</html>

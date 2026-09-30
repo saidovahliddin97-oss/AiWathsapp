@@ -1,0 +1,14 @@
+{
+  "user_name": "Алишер",
+  "known_facts": [
+    {"fact": "Корбар дар рӯзҳои корӣ кор мекунад (User works on weekdays)", "source": "user", "confidence": 1.0}
+  ],
+  "relatives": [
+    {"id": "mom", "phone": "992900000001", "name": "Модар", "relation": "mother", "age_group": "elder", "address": "Модарҷон"},
+    {"id": "dad", "phone": "992900000002", "name": "Падар", "relation": "father", "age_group": "elder", "address": "Падарҷон"},
+    {"id": "aunt_zarina", "phone": "992900000003", "name": "Зарина", "relation": "aunt", "age_group": "elder", "address": "Зарина хола"},
+    {"id": "uncle_karim", "phone": "992900000004", "name": "Карим", "relation": "uncle", "age_group": "elder", "address": "Карим тағо", "mode": "GREETING_ONLY"},
+    {"id": "sister_nigina", "phone": "992900000005", "name": "Нигина", "relation": "sister", "age_group": "younger", "address": "Нигина"},
+    {"id": "brother_farrukh", "phone": "992900000006", "name": "Фаррух", "relation": "brother", "age_group": "elder", "address": "Фаррух ака"}
+  ]
+}
