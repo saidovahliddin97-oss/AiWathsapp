@@ -110,6 +110,8 @@ class Store:
 
     # ------------------------------------------------------------------ relatives
     def upsert_relative(self, rel: Relative) -> None:
+        # config is the source of truth: a phone moved to another id replaces the old row
+        self._exec("DELETE FROM relatives WHERE phone=? AND id<>?", (normalize_phone(rel.phone), rel.id))
         self._exec(
             """INSERT INTO relatives (id, phone, name, relation, age_group, address, mode, notes)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -393,12 +395,51 @@ def detect_fact_candidates(text: str) -> list[str]:
     return [name for name, pattern in _CANDIDATE_PATTERNS if pattern.search(text)]
 
 
+class ConfigError(Exception):
+    """Human-readable problem in config/relatives.json."""
+
+
+# TextEdit on macOS turns " into “ ” by default ("smart quotes"), which breaks JSON.
+_SMART_QUOTES = str.maketrans({"“": '"', "”": '"', "„": '"', "«": '"', "»": '"', "\u00a0": " "})
+
+
+def read_relatives_config(path: str | Path) -> dict:
+    p = Path(path)
+    raw = p.read_text(encoding="utf-8-sig")
+    fixed = raw.translate(_SMART_QUOTES)
+    try:
+        data = json.loads(fixed)
+    except json.JSONDecodeError as e:
+        line = fixed.splitlines()[e.lineno - 1] if 0 < e.lineno <= len(fixed.splitlines()) else ""
+        raise ConfigError(
+            f"Ошибка в {p}: строка {e.lineno}, символ {e.colno} ({e.msg}).\n    {line.strip()}\n"
+            "Проверьте кавычки \" \", запятые между записями и что после последней записи нет запятой."
+        ) from None
+    if fixed != raw:
+        p.write_text(fixed, encoding="utf-8")  # repair smart quotes in place
+    if not isinstance(data, dict) or not isinstance(data.get("relatives", []), list):
+        raise ConfigError(f"{p}: ожидается объект с полем \"relatives\": [ ... ]")
+    seen: dict[str, str] = {}
+    for i, item in enumerate(data.get("relatives", []), 1):
+        try:
+            rel = Relative(**item)
+        except Exception as e:  # pydantic ValidationError or TypeError
+            raise ConfigError(f"{p}: запись №{i} ({item.get('name', '?') if isinstance(item, dict) else item}) — {e}") from None
+        phone = normalize_phone(rel.phone)
+        if len(phone) < 8:
+            raise ConfigError(f"{p}: у {rel.name} странный номер {rel.phone!r} — нужен полный номер с кодом страны")
+        if phone in seen:
+            raise ConfigError(f"{p}: номер {phone} указан дважды ({seen[phone]} и {rel.id})")
+        seen[phone] = rel.id
+    return data
+
+
 def load_relatives_config(store: Store, path: str | Path) -> int:
     """Load relatives and user facts from a JSON config file (idempotent)."""
     p = Path(path)
     if not p.exists():
         return 0
-    data = json.loads(p.read_text(encoding="utf-8"))
+    data = read_relatives_config(p)
     count = 0
     for item in data.get("relatives", []):
         store.upsert_relative(Relative(**item))
@@ -407,3 +448,14 @@ def load_relatives_config(store: Store, path: str | Path) -> int:
         key = item.pop("key", None) if isinstance(item, dict) else None
         store.add_fact(Fact(**item), key=key)
     return count
+
+
+if __name__ == "__main__":  # python -m app.memory config/relatives.json  -> validate the file
+    import sys
+
+    try:
+        d = read_relatives_config(sys.argv[1] if len(sys.argv) > 1 else "config/relatives.json")
+    except (ConfigError, FileNotFoundError) as err:
+        print(f"✖ {err}")
+        sys.exit(1)
+    print(f"✓ Родственников в списке: {len(d.get('relatives', []))}")

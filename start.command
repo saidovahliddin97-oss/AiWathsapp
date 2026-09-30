@@ -48,13 +48,33 @@ if [ ! -x .venv/bin/python ]; then "$PY" -m venv .venv || fail "Не удало�
 (cd bridge && npm install --no-audit --no-fund --silent) || fail "Не удалось установить пакеты моста (npm)"
 
 mkdir -p database
+say_step "Проверяю список родственников"
+.venv/bin/python -m app.memory config/relatives.json || {
+  open -e config/relatives.json
+  fail "Исправьте config/relatives.json (ошибка указана выше), сохраните и запустите start.command снова."
+}
+
+# остатки прошлого запуска могут занимать порты
+for port in 8000 3001; do
+  pids=$(lsof -ti tcp:$port 2>/dev/null)
+  [ -n "$pids" ] && kill $pids 2>/dev/null && sleep 1
+done
+
 say_step "Запускаю бота"
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > database/server.log 2>&1 &
 BACKEND=$!
 trap 'kill $BACKEND 2>/dev/null' EXIT INT TERM
-sleep 3
-kill -0 $BACKEND 2>/dev/null || { tail -20 database/server.log; fail "Сервер не запустился (см. текст выше)."; }
-curl -s http://127.0.0.1:8000/health; echo
+HEALTH=""
+for _ in $(seq 1 30); do
+  HEALTH=$(curl -s -m 2 http://127.0.0.1:8000/health) && [ -n "$HEALTH" ] && break
+  kill -0 $BACKEND 2>/dev/null || break
+  sleep 1
+done
+if [ -z "$HEALTH" ]; then
+  echo "----- database/server.log -----"; tail -30 database/server.log
+  fail "Сервер бота не запустился (причина выше). Пришлите этот текст — помогу."
+fi
+echo "Сервер: $HEALTH"
 echo "Демо-страница: http://127.0.0.1:8000/demo   ·   журнал: database/server.log"
 echo "Чтобы Mac не засыпал, пока окно открыто, включён caffeinate. Остановить бота — закройте окно или Ctrl+C."
 

@@ -78,3 +78,32 @@ def test_load_example_config(tmp_path):
     assert load_relatives_config(s, "config/relatives.example.json") >= 5
     assert s.find_relative_by_phone("992900000001").relation == "mother"
     assert load_relatives_config(s, tmp_path / "missing.json") == 0
+
+
+def test_smart_quotes_repaired(tmp_path):
+    f = tmp_path / "r.json"
+    f.write_text('{“relatives”: [{“id”: “mom”, “phone”: “+992 900 000 001”, “name”: “Модар”}]}', encoding="utf-8")
+    s = Store(tmp_path / "x.db")
+    assert load_relatives_config(s, f) == 1
+    assert '"relatives"' in f.read_text(encoding="utf-8")
+
+
+def test_config_errors_are_readable(tmp_path):
+    import pytest
+    from app.memory import ConfigError
+
+    f = tmp_path / "r.json"
+    f.write_text('{"relatives": [{"id": "a", "phone": "992900000001", "name": "A"},]}', encoding="utf-8")
+    with pytest.raises(ConfigError, match="строка 1"):
+        load_relatives_config(Store(), f)
+    f.write_text('{"relatives": [{"id": "a", "phone": "992900000001", "name": "A"},'
+                 '{"id": "b", "phone": "+992900000001", "name": "B"}]}', encoding="utf-8")
+    with pytest.raises(ConfigError, match="дважды"):
+        load_relatives_config(Store(), f)
+
+
+def test_phone_moved_to_new_id(store):
+    from app.models import Relative
+    store.upsert_relative(Relative(id="mama", phone="992900000001", name="Модар"))
+    assert store.find_relative_by_phone("992900000001").id == "mama"
+    assert store.get_relative("mom") is None

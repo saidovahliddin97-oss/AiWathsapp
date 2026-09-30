@@ -42,7 +42,7 @@ if (!TOKEN) {
   process.exit(1)
 }
 
-const logger = pino({ level: process.env.BRIDGE_LOG_LEVEL || 'warn' })
+const logger = pino({ level: process.env.BRIDGE_LOG_LEVEL || 'error' })
 const sentIds = new Set() // ids of messages this bridge sent (to ignore their echoes)
 const recent = new Map() // id -> WAMessage, for quoting replies in groups
 const sendLog = [] // timestamps for the hourly rate limit
@@ -140,15 +140,20 @@ async function forward(m) {
     }
   }
 
-  try {
-    const res = await fetch(`${BACKEND}/bridge/incoming`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-bridge-token': TOKEN },
-      body: JSON.stringify(payload),
-    })
-    if (!res.ok) console.error(`backend answered ${res.status} for message ${key.id}`)
-  } catch (e) {
-    console.error('backend is not reachable - is the Python server running?', e?.message)
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      const res = await fetch(`${BACKEND}/bridge/incoming`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-bridge-token': TOKEN },
+        body: JSON.stringify(payload),
+      })
+      if (res.ok) return
+      console.error(`backend answered ${res.status} for message ${key.id}`)
+      if (res.status < 500) return
+    } catch (e) {
+      console.error(`Python-сервер бота недоступен (попытка ${attempt}/5): ${e?.message}. Журнал: database/server.log`)
+    }
+    await sleep(2000 * attempt)
   }
 }
 
@@ -178,7 +183,9 @@ async function start() {
         console.error('Сессия WhatsApp завершена (устройство отвязано). Удалите папку bridge/auth и запустите снова.')
         process.exit(1)
       }
-      console.log('Соединение прервано, переподключаюсь...')
+      console.log(code === DisconnectReason.restartRequired
+        ? 'Привязка прошла, перезапускаю соединение (это нормально)...'
+        : 'Соединение прервано, переподключаюсь...')
       setTimeout(start, 3000)
     }
   })

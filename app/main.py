@@ -18,7 +18,7 @@ from app import scheduler
 from app.bridge import BridgeSender
 from app.claude import build_generator
 from app.config import Settings, get_settings
-from app.memory import Store, load_relatives_config
+from app.memory import ConfigError, Store, load_relatives_config
 from app.models import Fact, IncomingMessage, Relative
 from app.webhook import Assistant, DryRunSender
 from app.whatsapp import WhatsAppClient, parse_webhook, verify_challenge, verify_signature
@@ -39,7 +39,11 @@ def build_state(app: FastAPI, settings: Settings) -> None:
     if not Path(rel_file).exists() and Path("config/relatives.example.json").exists():
         log.warning("%s not found - loading config/relatives.example.json", rel_file)
         rel_file = "config/relatives.example.json"
-    load_relatives_config(store, rel_file)
+    try:
+        count = load_relatives_config(store, rel_file)
+        log.info("relatives loaded: %s from %s", count, rel_file)
+    except ConfigError as e:
+        log.error("%s\nБот не будет отвечать, пока файл не исправлен.", e)
 
     generator = build_generator(settings)
     wa = WhatsAppClient(settings) if settings.cloud_enabled else None
