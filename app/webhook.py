@@ -17,13 +17,13 @@ from app.media import NullTranscriber, Transcriber
 from app.memory import Store, detect_fact_candidates, normalize_phone
 from app.models import IncomingMessage, Mode, ProcessResult, Relative
 from app.prompts import build_context
-from app.validation import validate_reply
+from app.validation import explain_problems, validate_reply
 from app.whatsapp import WhatsAppError
 
 log = logging.getLogger("assistant")
 
 IMPORTANT_CATEGORIES = {"health", "loss"}
-MAX_GENERATION_ATTEMPTS = 2
+MAX_GENERATION_ATTEMPTS = 3
 
 
 class MessageSender(Protocol):
@@ -125,13 +125,15 @@ class Assistant:
         return "", "The relative sent a sticker or other media that cannot be read. Content unknown."
 
     async def _generate_valid(self, context: dict, mode: Mode, facts) -> tuple[str | None, str | None]:
-        """Generate + validate, retrying once with validator feedback."""
+        """Generate + validate, retrying with validator feedback."""
         feedback = None
+        self._last_draft = ""
         for _ in range(MAX_GENERATION_ATTEMPTS):
             draft = await self.generator.generate(context, feedback)  # may raise GenerationError
             result = validate_reply(draft, mode, facts)
             if result.ok:
                 return result.text, None
+            self._last_draft = result.text
             feedback = result.feedback
         return None, feedback
 
@@ -371,7 +373,11 @@ class Assistant:
         if reply is None:
             self.store.finish_event(event_id, "failed")
             self._log(logging.WARNING, "validation failed", event_id=event_id, relative=rel.id, problems=problems)
-            await self.notify_owner(f"❗ Не смог ответить ({who_name}): {text[:300]}\nОтветьте сами.")
+            await self.notify_owner(
+                f"❗ Не смог ответить ({who_name}): {text[:300]}\n"
+                f"Черновик бота: «{self._last_draft[:300]}»\n"
+                f"Не отправлен, потому что: {explain_problems(problems)}\nОтветьте сами."
+            )
             return ProcessResult(status="validation_failed", relative_id=rel.id, mode=mode, detail=problems)
 
         target = msg.chat_id if msg.is_group and msg.chat_id else rel.phone

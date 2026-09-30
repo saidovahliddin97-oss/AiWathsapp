@@ -51,3 +51,15 @@ def test_claims_allowed_with_facts():
 
 def test_neutral_closing_ok():
     assert validate_reply("Хуб, ҳозир каме банд ҳастам, баъдтар боз гап мезанем.", Mode.FULL_CHAT).ok
+
+
+def test_explain_problems_russian():
+    from app.validation import explain_problems
+    r = validate_reply("Ҳа, ба хона расидам. Salom hello world friend", Mode.FULL_CHAT)
+    text = explain_problems(r.feedback)
+    assert "не на таджикском" in text and "придумал факт о вас (arrival/location)" in text
+
+
+def test_russian_idioms_not_location():
+    assert validate_reply("Привет, Али! Я в порядке, спасибо.", Mode.FULL_CHAT).ok
+    assert not validate_reply("Я сейчас в Москве.", Mode.FULL_CHAT).ok

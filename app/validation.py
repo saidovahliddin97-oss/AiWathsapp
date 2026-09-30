@@ -32,7 +32,11 @@ _CLAIMS: list[tuple[str, re.Pattern[str], re.Pattern[str]]] = [
     ),
     (
         "location",
-        re.compile(r"\bман\s+(ҳозир\s+)?дар\s+\w+(\s+\w+)?\s+(ҳастам|мебошам)\b|\bя\s+(сейчас\s+)?в\s+\w+", re.I),
+        re.compile(
+            r"\bман\s+(ҳозир\s+)?дар\s+\w+(\s+\w+)?\s+(ҳастам|мебошам)\b"
+            r"|\bя\s+(сейчас\s+)?в\s+(?!порядк|норм|курс|восторг|шок|хорош|отличн|себе\b)\w+",
+            re.I,
+        ),
         re.compile(r"дар\s+\w+|живёт|живет|зиндагӣ|location|находится|шаҳр", re.I),
     ),
     (
@@ -124,3 +128,28 @@ def validate_reply(text: str, mode: Mode, facts: list[Fact] | None = None) -> Va
             problems.append(f"states an unconfirmed {category} fact about the user")
 
     return ValidationResult(not problems, t, problems)
+
+
+_RU = [
+    ("reply is empty", "модель вернула пустой ответ"),
+    ("contains technical/meta content", "в ответе служебные слова"),
+    ("must be written in Tajik Cyrillic", "ответ не на таджикском (не кириллица)"),
+    ("too long", "слишком длинно"),
+    ("too many sentences", "слишком много предложений"),
+    ("too many emojis", "слишком много эмодзи"),
+    ("states an unconfirmed", "бот придумал факт о вас"),
+]
+
+
+def explain_problems(feedback: str | None) -> str:
+    """Human (Russian) version of validator feedback for the owner."""
+    if not feedback:
+        return "неизвестно"
+    out = []
+    for part in feedback.split("; "):
+        ru = next((r for en, r in _RU if part.startswith(en)), part)
+        detail = part[part.find("("):] if "(" in part else ""
+        if part.startswith("states an unconfirmed"):
+            detail = "(" + part.removeprefix("states an unconfirmed ").removesuffix(" fact about the user") + ")"
+        out.append(f"{ru} {detail}".strip())
+    return "; ".join(out)

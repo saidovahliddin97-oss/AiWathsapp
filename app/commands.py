@@ -254,7 +254,9 @@ def _why(assistant: "Assistant") -> str:
         elif st == "generation_failed":
             why = f"ошибка модели: {d}"
         elif st == "validation_failed":
-            why = f"ответ модели не прошёл проверку ({d})"
+            from app.validation import explain_problems
+
+            why = f"ответ модели не прошёл проверку: {explain_problems(d)}"
         elif st == "send_failed_queued":
             why = f"не удалось отправить в WhatsApp, повторю позже ({d})"
         elif st == "owner_message_recorded":
