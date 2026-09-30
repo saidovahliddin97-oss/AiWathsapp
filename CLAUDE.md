@@ -17,8 +17,9 @@ not a developer: explain in Russian, short, and do the work yourself.
   via `python -m app.memory config/relatives.json`, then starts both processes).
 - Health: `curl -s http://127.0.0.1:8000/health`; demo UI (no WhatsApp sends): http://127.0.0.1:8000/demo
 - Tests: `.venv/bin/python -m pytest -q`
-- WhatsApp commands (owner writes to own "Избранное" chat): `/статус`, `/авто вкл|выкл [имя]`,
-  `/привет имя|всем`, `/пауза N`, `/старт`, `/список`.
+- WhatsApp commands (owner writes to the chat with themself): `/статус`, `/список`, `/добавить <номер> <кто> <обращение>`,
+  `/удалить <имя>`, `/авто вкл|выкл [имя]`, `/группы`, `/группа вкл|выкл <название>`, `/привет имя|всем`, `/пауза N`, `/старт`.
+- Groups are ignored unless enabled with `/группа вкл`. Modes set by commands persist across restarts.
 
 ## Common problems
 - `.env` booleans must be `true`/`false`; phone numbers without `+` go to `OWNER_PHONE`.

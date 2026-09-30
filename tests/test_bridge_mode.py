@@ -38,12 +38,32 @@ async def test_owner_commands_toggle_autopilot(personal, store):
     a = make_assistant(personal, store, gen, sender)
     res = await a.process(owner_cmd("/авто выкл", "c1"))
     assert res.status == "owner_command" and not a.autopilot_on()
+    assert all(r.mode is Mode.GREETING_ONLY for r in store.list_relatives())
     assert sender.sent[-1][0] == "me"
     r = await a.process(IncomingMessage(message_id="m1", phone=MOM, text="Салом"))
-    assert r.status == "skipped_autopilot_off" and gen.calls == []
+    assert r.status == "skipped_greeting_only" and gen.calls == []
     assert sender.sent[-1] == ("me", "✉️ Модарҷон: Салом")
-    await a.process(owner_cmd("/авто вкл", "c2"))
+    # enable just one person for testing
+    await a.process(owner_cmd("/авто вкл модар", "c2"))
     assert (await a.process(IncomingMessage(message_id="m2", phone=MOM, text="Салом"))).status == "dry_run"
+    assert (await a.process(IncomingMessage(message_id="m3", phone="992900000004", text="Салом"))).status == "skipped_greeting_only"
+    await a.process(owner_cmd("/авто вкл", "c3"))
+    assert all(r.mode is Mode.FULL_CHAT for r in store.list_relatives())
+
+
+async def test_old_global_flag_migrated(settings, store):
+    store.set_kv("autopilot", "0")
+    a = make_assistant(settings, store, FakeGenerator())
+    assert all(r.mode is Mode.GREETING_ONLY for r in store.list_relatives()) and a.default_mode() is Mode.GREETING_ONLY
+
+
+async def test_modes_survive_config_reload(settings, store, tmp_path):
+    from app.memory import load_relatives_config
+    f = tmp_path / "r.json"
+    f.write_text('{"relatives": [{"id": "mom", "phone": "992900000001", "name": "Модар", "mode": "FULL_CHAT"}]}')
+    store.set_relative_mode("mom", Mode.GREETING_ONLY)
+    load_relatives_config(store, f)
+    assert store.get_relative("mom").mode is Mode.GREETING_ONLY
 
 
 async def test_owner_command_per_relative_and_greet(personal, store):
@@ -55,8 +75,26 @@ async def test_owner_command_per_relative_and_greet(personal, store):
     assert "Ассалому" in res.reply
     assert (MOM, "Ассалому алейкум, Модарҷон! Саломат бошед.") in sender.sent
     assert (await a.process(owner_cmd("/список", "c3"))).reply.count("•") == 4
-    assert "Автопилот" in (await a.process(owner_cmd("/статус", "c4"))).reply
+    assert "Переписывается: 2 из 4" in (await a.process(owner_cmd("/статус", "c4"))).reply
     assert "/пауза" in (await a.process(owner_cmd("/чтото", "c5"))).reply
+
+
+async def test_add_and_remove_contact(personal, store, tmp_path):
+    import json
+    personal.relatives_file = str(tmp_path / "relatives.json")
+    gen = FakeGenerator(["Салом, дӯстам!"])
+    a = make_assistant(personal, store, gen)
+    res = await a.process(owner_cmd("/добавить +992 90 123-45-67 друг Тест", "c1"))
+    assert res.reply.startswith("Добавил") and "+992901234567" in res.reply
+    rel = store.find_relative_by_phone("992901234567")
+    assert rel.relation == "friend" and rel.address == "Тест"
+    saved = json.loads((tmp_path / "relatives.json").read_text(encoding="utf-8"))
+    assert saved["relatives"][0]["phone"] == "992901234567"
+    assert (await a.process(IncomingMessage(message_id="t1", phone="992901234567", text="салом"))).status == "dry_run"
+    res = await a.process(owner_cmd("/удалить Тест", "c2"))
+    assert res.reply.startswith("Удалил") and store.find_relative_by_phone("992901234567") is None
+    assert json.loads((tmp_path / "relatives.json").read_text(encoding="utf-8"))["relatives"] == []
+    assert (await a.process(owner_cmd("/добавить 12 мама", "c3"))).reply.startswith("Пример")
 
 
 async def test_owner_from_personal_phone_in_separate_number_mode(settings, store):
@@ -87,6 +125,12 @@ async def test_group_only_answers_when_addressed(personal, store):
     gen = FakeGenerator(["Ваалейкум ассалом, Карим тағо!"])
     a = make_assistant(personal, store, gen, sender)
     base = dict(phone="992900000004", chat_id=GROUP, is_group=True, group_name="Оила")
+    # groups are off by default: nothing is stored or answered, even when addressed
+    r0 = await a.process(IncomingMessage(message_id="g0", text="Алишер, салом!", **base))
+    assert r0.detail == "group disabled" and gen.calls == [] and store.get_relative("grp_120363000000000001") is None
+    assert "Оила — выключено" in (await a.process(owner_cmd("/группы", "c0"))).reply
+    assert "бот будет отвечать" in (await a.process(owner_cmd("/группа вкл оила", "c1"))).reply
+
     r1 = await a.process(IncomingMessage(message_id="g1", text="Ҳама салом!", **base))
     assert r1.status == "group_not_addressed" and gen.calls == []
     r2 = await a.process(IncomingMessage(message_id="g2", text="Алишер, чӣ хел ту?", **base))
@@ -97,6 +141,8 @@ async def test_group_only_answers_when_addressed(personal, store):
     assert ctx["recent_messages"][0]["text"] == "Карим тағо: Ҳама салом!"
     r3 = await a.process(IncomingMessage(message_id="g3", text="ок", addressed_to_bot=True, **base))
     assert r3.status == "dry_run"
+    await a.process(owner_cmd("/группа выкл Оила", "c2"))
+    assert (await a.process(IncomingMessage(message_id="g4", text="Алишер?", **base))).detail == "group disabled"
 
 
 async def test_important_news_and_failures_notify_owner(personal, store):

@@ -128,7 +128,7 @@ async function forward(m) {
       payload.group_name = (await sock.groupMetadata(chat)).subject
     } catch {}
   }
-  if (kind === 'image' && !key.fromMe) {
+  if (kind === 'image' && !key.fromMe && (!isGroup || addressed)) {
     try {
       const buf = await downloadMediaMessage(m, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage })
       if (buf.length <= MAX_MEDIA_BYTES) {

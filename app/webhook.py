@@ -64,6 +64,7 @@ class Assistant:
         self.sender = sender
         self.media_source = media_source
         self.transcriber = transcriber or NullTranscriber()
+        self._migrate_flags()
 
     # ----------------------------------------------------------------- helpers
     @property
@@ -178,7 +179,21 @@ class Assistant:
             self._log(logging.WARNING, "owner notification failed", error=e)
 
     def autopilot_on(self) -> bool:
-        return self.store.get_flag("autopilot", True)
+        """True if at least one relative gets full replies."""
+        return any(r.mode is Mode.FULL_CHAT for r in self.store.list_relatives() if r.relation != "family_group")
+
+    def default_mode(self) -> Mode:
+        return Mode(self.store.get_kv("default_mode", Mode.FULL_CHAT.value))
+
+    def _migrate_flags(self) -> None:
+        # Older versions had a global "autopilot" switch; now it is a bulk per-person mode.
+        if self.store.get_kv("autopilot") == "0":
+            self.store.set_all_modes(Mode.GREETING_ONLY)
+            self.store.set_kv("default_mode", Mode.GREETING_ONLY.value)
+        self.store.set_kv("autopilot", "1")
+
+    def group_enabled(self, chat_id: str | None) -> bool:
+        return bool(chat_id) and self.store.get_flag(f"group_on:{chat_id}", False)
 
     def paused(self, relative_id: str) -> bool:
         now = time.time()
@@ -197,6 +212,7 @@ class Assistant:
                 name=msg.group_name or "Оилавӣ гурӯҳ",
                 relation="family_group",
                 age_group="peer",
+                mode=self.default_mode(),
                 notes=["This is a family group chat with several relatives; the User is one of the members."],
             )
             self.store.upsert_relative(rel)
@@ -244,6 +260,12 @@ class Assistant:
             if answer:
                 await self.notify_owner(answer) if msg.self_chat else await self._send_raw(msg.phone, answer)
             return ProcessResult(status="owner_command", reply=answer)
+        # Groups are ignored completely unless the owner enabled them (/группа вкл <название>)
+        if msg.is_group and not self.group_enabled(msg.chat_id):
+            if msg.chat_id and msg.group_name:
+                self.store.set_kv(f"group_seen:{msg.chat_id}", msg.group_name)
+            self.store.finish_event(event_id, "ignored")
+            return ProcessResult(status="group_not_addressed", detail="group disabled")
         if msg.from_me:
             rel = self._group_entity(msg) if msg.is_group else self.store.find_relative_by_phone(msg.phone)
             self.store.finish_event(event_id, "done")
@@ -292,8 +314,6 @@ class Assistant:
         skip: str | None = None
         if msg.is_group and not (msg.addressed_to_bot or self._addresses_owner(text)):
             skip = "group_not_addressed"
-        elif not self.autopilot_on():
-            skip = "skipped_autopilot_off"
         elif mode is Mode.GREETING_ONLY:
             skip = "skipped_greeting_only"
         elif self.paused(rel.id):

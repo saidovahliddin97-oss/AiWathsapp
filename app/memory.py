@@ -109,15 +109,18 @@ class Store:
             return self._conn.execute(sql, tuple(params))
 
     # ------------------------------------------------------------------ relatives
-    def upsert_relative(self, rel: Relative) -> None:
+    def upsert_relative(self, rel: Relative, keep_mode: bool = False) -> None:
+        """Insert/update a relative. ``keep_mode`` keeps a mode changed at runtime by
+        owner commands (used when re-reading the config file on every start)."""
         # config is the source of truth: a phone moved to another id replaces the old row
         self._exec("DELETE FROM relatives WHERE phone=? AND id<>?", (normalize_phone(rel.phone), rel.id))
+        mode_update = "" if keep_mode else ", mode=excluded.mode"
         self._exec(
-            """INSERT INTO relatives (id, phone, name, relation, age_group, address, mode, notes)
+            f"""INSERT INTO relatives (id, phone, name, relation, age_group, address, mode, notes)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET phone=excluded.phone, name=excluded.name,
                  relation=excluded.relation, age_group=excluded.age_group,
-                 address=excluded.address, mode=excluded.mode, notes=excluded.notes""",
+                 address=excluded.address, notes=excluded.notes{mode_update}""",
             (
                 rel.id,
                 normalize_phone(rel.phone),
@@ -156,6 +159,16 @@ class Store:
 
     def set_relative_mode(self, relative_id: str, mode: Mode) -> None:
         self._exec("UPDATE relatives SET mode=? WHERE id=?", (mode.value, relative_id))
+
+    def set_all_modes(self, mode: Mode) -> None:
+        self._exec("UPDATE relatives SET mode=?", (mode.value,))
+
+    def delete_relative(self, relative_id: str) -> None:
+        self._exec("DELETE FROM relatives WHERE id=?", (relative_id,))
+
+    def kv_prefix(self, prefix: str) -> dict[str, str]:
+        rows = self._exec("SELECT key, value FROM kv WHERE key LIKE ?", (prefix + "%",)).fetchall()
+        return {r["key"][len(prefix):]: r["value"] for r in rows}
 
     def find_relative_by_name(self, query: str) -> Relative | None:
         """Loose lookup for owner commands: id, name or address (case-insensitive)."""
@@ -434,6 +447,27 @@ def read_relatives_config(path: str | Path) -> dict:
     return data
 
 
+def save_relative_to_config(path: str | Path, rel: Relative) -> None:
+    """Add or replace one relative in the JSON config (so it survives restarts)."""
+    p = Path(path)
+    data = read_relatives_config(p) if p.exists() else {"known_facts": [], "relatives": []}
+    items = [r for r in data.get("relatives", []) if r.get("id") != rel.id
+             and normalize_phone(str(r.get("phone", ""))) != normalize_phone(rel.phone)]
+    items.append(rel.model_dump(mode="json", exclude={"notes"} if not rel.notes else None))
+    data["relatives"] = items
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def remove_relative_from_config(path: str | Path, relative_id: str) -> None:
+    p = Path(path)
+    if not p.exists():
+        return
+    data = read_relatives_config(p)
+    data["relatives"] = [r for r in data.get("relatives", []) if r.get("id") != relative_id]
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def load_relatives_config(store: Store, path: str | Path) -> int:
     """Load relatives and user facts from a JSON config file (idempotent)."""
     p = Path(path)
@@ -442,7 +476,7 @@ def load_relatives_config(store: Store, path: str | Path) -> int:
     data = read_relatives_config(p)
     count = 0
     for item in data.get("relatives", []):
-        store.upsert_relative(Relative(**item))
+        store.upsert_relative(Relative(**item), keep_mode=True)
         count += 1
     for item in data.get("known_facts", []):
         key = item.pop("key", None) if isinstance(item, dict) else None
