@@ -58,6 +58,8 @@ if [ ! -x .venv/bin/python ]; then "$PY" -m venv .venv || fail "Не удало�
 (cd bridge && npm install --no-audit --no-fund --silent) || fail "Не удалось установить пакеты моста (npm)"
 
 mkdir -p database
+say_step "Проверяю настройки"
+.venv/bin/python -m app.config || { open -e .env; fail "Исправьте .env (ошибка указана выше), сохраните и запустите бота снова."; }
 say_step "Проверяю список родственников"
 .venv/bin/python -m app.memory config/relatives.json || {
   open -e config/relatives.json

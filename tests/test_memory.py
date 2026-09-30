@@ -107,3 +107,10 @@ def test_phone_moved_to_new_id(store):
     store.upsert_relative(Relative(id="mama", phone="992900000001", name="Модар"))
     assert store.find_relative_by_phone("992900000001").id == "mama"
     assert store.get_relative("mom") is None
+
+
+def test_personal_number_accepts_phone():
+    from app.config import Settings
+    s = Settings(_env_file=None, personal_number="992911233378")
+    assert s.personal_number is True and s.owner_phone == "992911233378"
+    assert Settings(_env_file=None, personal_number="false").personal_number is False

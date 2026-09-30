@@ -6,7 +6,9 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field, SecretStr
+import re
+
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -70,6 +72,26 @@ class Settings(BaseSettings):
     admin_token: SecretStr = SecretStr("")
     outbox_max_attempts: int = 5
 
+    @field_validator("personal_number", mode="before")
+    @classmethod
+    def _personal_number_phone(cls, v):
+        # People often put their phone number here; that means "yes, my own number".
+        if isinstance(v, str) and len(re.sub(r"\D", "", v)) >= 8:
+            return True
+        return v
+
+    @model_validator(mode="before")
+    @classmethod
+    def _owner_phone_from_personal(cls, data):
+        if isinstance(data, dict):
+            for key in ("personal_number", "PERSONAL_NUMBER"):
+                v = data.get(key)
+                if isinstance(v, str) and len(re.sub(r"\D", "", v)) >= 8 and not (
+                    data.get("owner_phone") or data.get("OWNER_PHONE")
+                ):
+                    data["owner_phone"] = v
+        return data
+
     @property
     def claude_enabled(self) -> bool:
         return bool(self.anthropic_api_key.get_secret_value())
@@ -100,3 +122,20 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+if __name__ == "__main__":  # python -m app.config  -> check .env in plain words
+    import sys
+
+    from pydantic import ValidationError
+
+    try:
+        s = Settings()
+    except ValidationError as e:
+        for err in e.errors():
+            name = str(err["loc"][0]).upper()
+            print(f"✖ В файле .env неверное значение {name}={err.get('input')!r}: {err['msg']}")
+        print("  Для true/false пишите только true или false; номер телефона — в OWNER_PHONE.")
+        sys.exit(1)
+    llm = "Claude" if s.claude_enabled else "Gemini" if s.gemini_enabled else "нет ключа (демо-режим)"
+    print(f"✓ Настройки в порядке. Модель: {llm}. Личный номер: {'да' if s.personal_number else 'нет'}.")
