@@ -6,13 +6,14 @@ Kept independent from FastAPI so it can be unit-tested directly.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Protocol
 
 from app.claude import GenerationError, ReplyGenerator
 from app.config import Settings
 from app.media import NullTranscriber, Transcriber
-from app.memory import Store, detect_fact_candidates
+from app.memory import Store, detect_fact_candidates, normalize_phone
 from app.models import IncomingMessage, Mode, ProcessResult, Relative
 from app.prompts import build_context
 from app.validation import validate_reply
@@ -20,12 +21,12 @@ from app.whatsapp import WhatsAppError
 
 log = logging.getLogger("assistant")
 
-GREETING_ONLY_COOLDOWN_SECONDS = 12 * 3600
+IMPORTANT_CATEGORIES = {"health", "loss"}
 MAX_GENERATION_ATTEMPTS = 2
 
 
 class MessageSender(Protocol):
-    async def send_text(self, to: str, text: str) -> str | None: ...
+    async def send_text(self, to: str, text: str, quote_id: str | None = None) -> str | None: ...
 
 
 class MediaSource(Protocol):
@@ -38,7 +39,7 @@ class DryRunSender:
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
 
-    async def send_text(self, to: str, text: str) -> str | None:
+    async def send_text(self, to: str, text: str, quote_id: str | None = None) -> str | None:
         self.sent.append((to, text))
         return f"dryrun-{len(self.sent)}"
 
@@ -65,6 +66,12 @@ class Assistant:
         self.transcriber = transcriber or NullTranscriber()
 
     # ----------------------------------------------------------------- helpers
+    @property
+    def generator_label(self) -> str:
+        from app.claude import generator_name
+
+        return generator_name(self.generator)
+
     @property
     def _status_ok(self) -> str:
         return "dry_run" if self.settings.dry_run or isinstance(self.sender, DryRunSender) else "sent"
@@ -126,16 +133,78 @@ class Assistant:
             feedback = result.feedback
         return None, feedback
 
-    async def _deliver(self, rel: Relative, text: str, kind: str, event_id: str | None) -> ProcessResult | None:
+    async def _deliver(
+        self,
+        rel: Relative,
+        text: str,
+        kind: str,
+        event_id: str | None,
+        target: str | None = None,
+        quote_id: str | None = None,
+    ) -> ProcessResult | None:
         """Send and store. Returns a failure ProcessResult or None on success."""
+        target = target or rel.phone
         try:
-            wa_id = await self.sender.send_text(rel.phone, text)
+            wa_id = await self.sender.send_text(target, text, quote_id=quote_id)
         except WhatsAppError as e:
-            outbox_id = self.store.enqueue_outbox(rel.id, rel.phone, text, kind, str(e))
+            outbox_id = self.store.enqueue_outbox(rel.id, target, text, kind, str(e))
             self._log(logging.ERROR, "send failed, queued", event_id=event_id, relative=rel.id, outbox=outbox_id, error=e)
             return ProcessResult(status="send_failed_queued", relative_id=rel.id, reply=text, detail=str(e))
         self.store.add_message(rel.id, "assistant", text, kind=kind, wa_message_id=wa_id)
         return None
+
+    # ------------------------------------------------------------ owner & flags
+    def _owner_target(self) -> str | None:
+        """Where notifications for the owner go ("me" = own self-chat in personal-number mode)."""
+        if not self.settings.notify_owner:
+            return None
+        if self.settings.personal_number:
+            return "me"
+        return self.settings.owner_phone or None
+
+    def _is_owner(self, msg: IncomingMessage) -> bool:
+        if msg.from_me and msg.self_chat:
+            return True
+        owner = normalize_phone(self.settings.owner_phone)
+        return bool(owner) and not msg.is_group and normalize_phone(msg.phone) == owner
+
+    async def notify_owner(self, text: str) -> None:
+        target = self._owner_target()
+        if not target:
+            return
+        try:
+            await self.sender.send_text(target, text)
+        except WhatsAppError as e:
+            self._log(logging.WARNING, "owner notification failed", error=e)
+
+    def autopilot_on(self) -> bool:
+        return self.store.get_flag("autopilot", True)
+
+    def paused(self, relative_id: str) -> bool:
+        now = time.time()
+        if float(self.store.get_kv("pause_all_until", "0")) > now:
+            return True
+        last_manual = float(self.store.get_kv(f"manual:{relative_id}", "0"))
+        return now - last_manual < self.settings.manual_pause_minutes * 60
+
+    def _group_entity(self, msg: IncomingMessage) -> Relative:
+        rel_id = "grp_" + normalize_phone(msg.chat_id or "")
+        rel = self.store.get_relative(rel_id)
+        if rel is None:
+            rel = Relative(
+                id=rel_id,
+                phone=normalize_phone(msg.chat_id or ""),
+                name=msg.group_name or "Оилавӣ гурӯҳ",
+                relation="family_group",
+                age_group="peer",
+                notes=["This is a family group chat with several relatives; the User is one of the members."],
+            )
+            self.store.upsert_relative(rel)
+        return rel
+
+    def _addresses_owner(self, text: str) -> bool:
+        low = text.lower()
+        return any(re.search(rf"(?<!\w){re.escape(n.lower())}", low) for n in self.settings.owner_name_list)
 
     # --------------------------------------------------------------- pipeline
     async def process(self, msg: IncomingMessage) -> ProcessResult:
@@ -165,10 +234,35 @@ class Assistant:
 
     async def _process_claimed(self, msg: IncomingMessage) -> ProcessResult:
         event_id = msg.message_id
-        rel = self._resolve_relative(msg)
-        if rel is None:
-            self.store.finish_event(event_id, "ignored")
-            return ProcessResult(status="ignored_unknown_sender")
+
+        # 1. Owner: commands and manual replies
+        if self._is_owner(msg):
+            self.store.finish_event(event_id, "done")
+            from app.commands import handle_command
+
+            answer = await handle_command(self, msg.text)
+            if answer:
+                await self.notify_owner(answer) if msg.self_chat else await self._send_raw(msg.phone, answer)
+            return ProcessResult(status="owner_command", reply=answer)
+        if msg.from_me:
+            rel = self._group_entity(msg) if msg.is_group else self.store.find_relative_by_phone(msg.phone)
+            self.store.finish_event(event_id, "done")
+            if rel is None or not msg.text.strip():
+                return ProcessResult(status="owner_message_recorded")
+            self.store.add_message(rel.id, "assistant", msg.text.strip(), kind="manual", wa_message_id=event_id)
+            self.store.set_kv(f"manual:{rel.id}", str(time.time()))
+            return ProcessResult(status="owner_message_recorded", relative_id=rel.id)
+
+        # 2. Who is talking
+        speaker: Relative | None = self.store.find_relative_by_phone(msg.phone)
+        if msg.is_group:
+            rel = self._group_entity(msg)
+        else:
+            rel = self._resolve_relative(msg)
+            if rel is None:
+                self.store.finish_event(event_id, "ignored")
+                await self._notify_unknown(msg)
+                return ProcessResult(status="ignored_unknown_sender")
 
         text, media_note = await self._media_context(msg)
         if not text and not media_note:
@@ -180,48 +274,90 @@ class Assistant:
 
         history = self.store.recent_messages(rel.id, limit=self.settings.history_limit)
         stored_text = text or f"[{msg.kind}]"
+        if msg.is_group:
+            who = (speaker.address or speaker.name) if speaker else (msg.profile_name or msg.phone)
+            stored_text = f"{who}: {stored_text}"
         self.store.add_message(rel.id, "relative", stored_text, kind=msg.kind, wa_message_id=event_id)
-        for category in detect_fact_candidates(text):
-            self.store.add_fact_candidate(rel.id, text, category)
 
+        fact_owner = speaker.id if (msg.is_group and speaker) else rel.id
+        categories = detect_fact_candidates(text)
+        for category in categories:
+            self.store.add_fact_candidate(fact_owner, text, category)
+        who_name = (speaker.address or speaker.name) if speaker else (msg.profile_name or msg.phone)
+        if IMPORTANT_CATEGORIES.intersection(categories):
+            await self.notify_owner(f"⚠️ Муҳим / Важно — {who_name}: {text[:500]}")
+
+        # 3. Should we answer at all?
         mode = rel.mode
-        if mode is Mode.GREETING_ONLY:
-            last = self.store.last_assistant_message_at(rel.id)
-            if last and time.time() - last < GREETING_ONLY_COOLDOWN_SECONDS:
-                self.store.finish_event(event_id, "done")
-                return ProcessResult(status="skipped_greeting_only", relative_id=rel.id, mode=mode)
+        skip: str | None = None
+        if msg.is_group and not (msg.addressed_to_bot or self._addresses_owner(text)):
+            skip = "group_not_addressed"
+        elif not self.autopilot_on():
+            skip = "skipped_autopilot_off"
+        elif mode is Mode.GREETING_ONLY:
+            skip = "skipped_greeting_only"
+        elif self.paused(rel.id):
+            skip = "skipped_manual_pause"
+        if skip:
+            self.store.finish_event(event_id, "done")
+            if skip in ("skipped_autopilot_off", "skipped_greeting_only") and self.settings.forward_unanswered:
+                await self.notify_owner(f"✉️ {who_name}: {text[:500] or '[' + msg.kind + ']'}")
+            return ProcessResult(status=skip, relative_id=rel.id, mode=mode)
 
         if self.generator is None:
             self.store.finish_event(event_id, "failed")
             return ProcessResult(status="generation_failed", relative_id=rel.id, mode=mode, detail="no generator configured")
 
+        # 4. Generate, validate, send
         facts = self.store.get_facts(rel.id)
+        if msg.is_group and speaker:
+            facts = facts + [f for f in self.store.get_facts(speaker.id) if f.relative_id]
         context = build_context(
             mode,
             rel,
             facts,
             history,
             incoming_text=text,
-            recent_greetings=self.store.recent_greetings(rel.id) if mode is Mode.GREETING_ONLY else None,
             media_note=media_note,
+            speaker=speaker if msg.is_group else None,
+            speaker_name=who_name if msg.is_group else None,
         )
         try:
             reply, problems = await self._generate_valid(context, mode, facts)
         except GenerationError as e:
             self.store.finish_event(event_id, "retryable" if e.retryable else "failed")
             self._log(logging.ERROR, "generation failed", event_id=event_id, relative=rel.id, error=e)
+            if not e.retryable:
+                await self.notify_owner(f"❗ Не смог ответить ({who_name}): {text[:300]}\nОтветьте сами.")
             return ProcessResult(status="generation_failed", relative_id=rel.id, mode=mode, detail=str(e))
         if reply is None:
             self.store.finish_event(event_id, "failed")
             self._log(logging.WARNING, "validation failed", event_id=event_id, relative=rel.id, problems=problems)
+            await self.notify_owner(f"❗ Не смог ответить ({who_name}): {text[:300]}\nОтветьте сами.")
             return ProcessResult(status="validation_failed", relative_id=rel.id, mode=mode, detail=problems)
 
-        failure = await self._deliver(rel, reply, "greeting" if mode is Mode.GREETING_ONLY else "text", event_id)
+        target = msg.chat_id if msg.is_group and msg.chat_id else rel.phone
+        quote = event_id if msg.is_group else None
+        failure = await self._deliver(rel, reply, "text", event_id, target=target, quote_id=quote)
         self.store.finish_event(event_id, "done")
         if failure:
             failure.mode = mode
             return failure
         return ProcessResult(status=self._status_ok, relative_id=rel.id, mode=mode, reply=reply)
+
+    async def _send_raw(self, to: str, text: str) -> None:
+        try:
+            await self.sender.send_text(to, text)
+        except WhatsAppError as e:
+            self._log(logging.WARNING, "send failed", error=e)
+
+    async def _notify_unknown(self, msg: IncomingMessage) -> None:
+        key = f"unknown_notified:{normalize_phone(msg.phone)}"
+        if time.time() - float(self.store.get_kv(key, "0")) < 24 * 3600:
+            return
+        self.store.set_kv(key, str(time.time()))
+        name = msg.profile_name or ""
+        await self.notify_owner(f"👤 Незнакомый номер +{normalize_phone(msg.phone)} {name}: {(msg.text or '')[:300]}")
 
     async def greet(self, relative_id: str) -> ProcessResult:
         """Send one proactive GREETING_ONLY message (e.g. from a scheduler)."""

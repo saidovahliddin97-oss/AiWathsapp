@@ -33,7 +33,7 @@ class FailingSender:
         self.fail_times = fail_times
         self.sent = []
 
-    async def send_text(self, to, text):
+    async def send_text(self, to, text, quote_id=None):
         if self.fail_times > 0:
             self.fail_times -= 1
             raise WhatsAppError("WhatsApp API error 503", 503)

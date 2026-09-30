@@ -14,6 +14,8 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Qu
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
+from app import scheduler
+from app.bridge import BridgeSender
 from app.claude import build_generator
 from app.config import Settings, get_settings
 from app.memory import Store, load_relatives_config
@@ -40,14 +42,23 @@ def build_state(app: FastAPI, settings: Settings) -> None:
     load_relatives_config(store, rel_file)
 
     generator = build_generator(settings)
-    wa = WhatsAppClient(settings) if settings.whatsapp_enabled else None
-    sender = DryRunSender() if settings.dry_run or wa is None else wa
-    if sender is not wa:
+    wa = WhatsAppClient(settings) if settings.cloud_enabled else None
+    if settings.dry_run:
+        sender = DryRunSender()
+    elif settings.whatsapp_mode == "bridge":
+        sender = BridgeSender(settings)
+    elif wa is not None:
+        sender = wa
+    else:
+        sender = DryRunSender()
+    if isinstance(sender, DryRunSender):
         log.warning("WhatsApp sending disabled (DRY_RUN or credentials missing) - replies are only stored")
+    log.info("whatsapp_mode=%s llm=%s", settings.whatsapp_mode, type(generator).__name__)
 
     app.state.settings = settings
     app.state.store = store
     app.state.whatsapp = wa
+    app.state.sender = sender
     app.state.assistant = Assistant(settings, store, generator, sender, media_source=wa)
     # The demo never sends real WhatsApp messages.
     app.state.demo_assistant = Assistant(settings, store, generator, DryRunSender(), media_source=None)
@@ -67,11 +78,12 @@ async def lifespan(app: FastAPI):
     configure_logging()
     if not getattr(app.state, "store", None):
         build_state(app, get_settings())
-    task = asyncio.create_task(_outbox_loop(app))
+    tasks = [asyncio.create_task(_outbox_loop(app)), asyncio.create_task(scheduler.loop(app.state.assistant))]
     yield
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+    for task in tasks:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
     if app.state.whatsapp:
         await app.state.whatsapp.aclose()
 
@@ -89,7 +101,7 @@ def require_admin(
     if expected:
         if not hmac.compare_digest(x_admin_token or token or "", expected):
             raise HTTPException(status_code=401, detail="admin token required")
-    elif settings.whatsapp_enabled and not settings.dry_run:
+    elif not settings.dry_run and not isinstance(request.app.state.sender, DryRunSender):
         # Production without ADMIN_TOKEN: keep admin/demo closed.
         raise HTTPException(status_code=403, detail="set ADMIN_TOKEN to use admin endpoints")
 
@@ -98,10 +110,13 @@ def require_admin(
 @app.get("/health")
 async def health(request: Request) -> dict:
     s: Settings = request.app.state.settings
+    assistant: Assistant = request.app.state.assistant
+    live = not isinstance(request.app.state.sender, DryRunSender)
     return {
         "status": "ok",
-        "claude": "api" if s.claude_enabled else ("offline-demo" if s.allow_offline_generator else "disabled"),
-        "whatsapp": "live" if s.whatsapp_enabled and not s.dry_run else "dry-run",
+        "llm": assistant.generator_label,
+        "whatsapp": (s.whatsapp_mode if live else "dry-run"),
+        "autopilot": assistant.autopilot_on(),
         "relatives": len(request.app.state.store.list_relatives()),
     }
 
@@ -131,6 +146,38 @@ async def webhook_receive(request: Request, background: BackgroundTasks) -> dict
         # Acknowledge fast (Meta retries slow webhooks); process after the response.
         background.add_task(_safe_process, assistant, msg)
     return {"received": len(messages)}
+
+
+class BridgeMessage(BaseModel):
+    message_id: str
+    phone: str = ""
+    chat_id: str | None = None
+    is_group: bool = False
+    group_name: str | None = None
+    addressed_to_bot: bool = False
+    from_me: bool = False
+    self_chat: bool = False
+    kind: str = "text"
+    text: str = ""
+    caption: str | None = None
+    profile_name: str | None = None
+    media_b64: str | None = None
+    media_mime: str | None = None
+
+
+@app.post("/bridge/incoming")
+async def bridge_incoming(
+    request: Request, body: BridgeMessage, background: BackgroundTasks, x_bridge_token: str | None = Header(default=None)
+) -> dict:
+    """Messages from the linked-device bridge (bridge/index.js)."""
+    s: Settings = request.app.state.settings
+    expected = s.bridge_token.get_secret_value()
+    if not expected or not hmac.compare_digest(x_bridge_token or "", expected):
+        raise HTTPException(status_code=401, detail="bad bridge token")
+    kind = body.kind if body.kind in ("text", "audio", "image") else "unsupported"
+    msg = IncomingMessage(**body.model_dump(exclude={"kind"}), kind=kind)
+    background.add_task(_safe_process, request.app.state.assistant, msg)
+    return {"ok": True}
 
 
 async def _safe_process(assistant: Assistant, msg: IncomingMessage) -> None:

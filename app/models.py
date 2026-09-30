@@ -54,6 +54,15 @@ class IncomingMessage(BaseModel):
     caption: str | None = None
     timestamp: int | None = None
     profile_name: str | None = None
+    # Linked-device bridge extras
+    chat_id: str | None = None  # where to reply (group jid or private chat)
+    is_group: bool = False
+    group_name: str | None = None
+    addressed_to_bot: bool = False  # @mention or reply to one of our messages
+    from_me: bool = False  # written from the owner's own account (personal-number mode)
+    self_chat: bool = False  # the owner's "message yourself" chat
+    media_b64: str | None = None
+    media_mime: str | None = None
 
 
 class ProcessResult(BaseModel):
@@ -64,6 +73,11 @@ class ProcessResult(BaseModel):
         "ignored_unknown_sender",
         "ignored_empty",
         "skipped_greeting_only",
+        "skipped_manual_pause",
+        "skipped_autopilot_off",
+        "group_not_addressed",
+        "owner_command",
+        "owner_message_recorded",
         "generation_failed",
         "validation_failed",
         "send_failed_queued",

@@ -120,14 +120,13 @@ async def test_greeting_only_proactive(settings, store):
     assert store.recent_greetings("aunt")[0] == res.reply
 
 
-async def test_greeting_only_does_not_continue_dialog(settings, store):
+async def test_greeting_only_does_not_answer_incoming(settings, store):
+    """GREETING_ONLY = the bot only sends greetings; incoming messages wait for the owner."""
     gen = FakeGenerator(["Ваалейкум ассалом, Зарина хола!"])
     a = make_assistant(settings, store, gen)
-    first = await a.process(msg("Салом!", phone=AUNT, mid="a1"))
-    second = await a.process(msg("Чӣ гапҳо?", phone=AUNT, mid="a2"))
-    assert first.status == "dry_run"
-    assert second.status == "skipped_greeting_only"
-    assert len(gen.calls) == 1
+    res = await a.process(msg("Салом!", phone=AUNT, mid="a1"))
+    assert res.status == "skipped_greeting_only" and gen.calls == []
+    assert store.recent_messages("aunt")[-1].text == "Салом!"
 
 
 # 9. FULL_CHAT with history

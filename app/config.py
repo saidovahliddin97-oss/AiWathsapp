@@ -13,6 +13,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    # LLM provider: auto | claude | gemini | offline
+    # auto = Claude if ANTHROPIC_API_KEY is set, else Gemini if GEMINI_API_KEY is set, else offline demo
+    llm_provider: str = "auto"
+    gemini_api_key: SecretStr = SecretStr("")
+    gemini_model: str = "gemini-flash-latest"
+
     # Claude
     anthropic_api_key: SecretStr = SecretStr("")
     llm_model: str = "claude-opus-5-5"
@@ -21,6 +27,29 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 30.0
     llm_max_retries: int = 2
     llm_use_fallbacks: bool = True
+
+    # How we talk to WhatsApp: "bridge" (free, linked device via bridge/) or "cloud" (official Cloud API)
+    whatsapp_mode: str = "bridge"
+    bridge_url: str = "http://127.0.0.1:3001"
+    bridge_token: SecretStr = SecretStr("")
+
+    # Owner (you): notifications and WhatsApp commands
+    owner_phone: str = ""
+    owner_names: str = ""  # comma separated names that mean "the bot is being addressed" in groups
+    notify_owner: bool = True
+    # true = the bot runs on YOUR OWN WhatsApp (linked device): notifications go to your
+    # "message yourself" chat and your own manual replies pause the bot in that chat
+    personal_number: bool = False
+    # forward messages the bot does not answer (greeting-only / autopilot off) to you
+    forward_unanswered: bool = True
+    manual_pause_minutes: int = 120  # after you reply yourself, the bot keeps quiet in that chat
+
+    # Scheduled greetings (GREETING_ONLY)
+    greetings_enabled: bool = True
+    greeting_interval_days: float = 7.0
+    greeting_hours: str = "10-20"  # local time window for sending
+    greeting_gap_minutes_min: float = 1.0
+    greeting_gap_minutes_max: float = 5.0
 
     # WhatsApp Cloud API
     whatsapp_token: SecretStr = SecretStr("")
@@ -46,8 +75,26 @@ class Settings(BaseSettings):
         return bool(self.anthropic_api_key.get_secret_value())
 
     @property
-    def whatsapp_enabled(self) -> bool:
-        return bool(self.whatsapp_token.get_secret_value() and self.whatsapp_phone_number_id)
+    def cloud_enabled(self) -> bool:
+        return self.whatsapp_mode == "cloud" and bool(
+            self.whatsapp_token.get_secret_value() and self.whatsapp_phone_number_id
+        )
+
+    @property
+    def gemini_enabled(self) -> bool:
+        return bool(self.gemini_api_key.get_secret_value())
+
+    @property
+    def owner_name_list(self) -> list[str]:
+        return [n.strip() for n in self.owner_names.split(",") if n.strip()]
+
+    @property
+    def greeting_window(self) -> tuple[int, int]:
+        try:
+            start, end = (int(x) for x in self.greeting_hours.split("-"))
+            return start, end
+        except ValueError:
+            return 10, 20
 
 
 @lru_cache

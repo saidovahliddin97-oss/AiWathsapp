@@ -63,6 +63,10 @@ CREATE TABLE IF NOT EXISTS fact_candidates (
     status TEXT NOT NULL DEFAULT 'pending',
     created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS kv (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS outbox (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     relative_id TEXT NOT NULL,
@@ -147,6 +151,53 @@ class Store:
 
     def list_relatives(self) -> list[Relative]:
         return [self._row_to_relative(r) for r in self._exec("SELECT * FROM relatives ORDER BY id")]
+
+    def set_relative_mode(self, relative_id: str, mode: Mode) -> None:
+        self._exec("UPDATE relatives SET mode=? WHERE id=?", (mode.value, relative_id))
+
+    def find_relative_by_name(self, query: str) -> Relative | None:
+        """Loose lookup for owner commands: id, name or address (case-insensitive)."""
+        q = query.strip().lower()
+        if not q:
+            return None
+        rels = self.list_relatives()
+        for rel in rels:
+            if q in (rel.id.lower(), rel.name.lower(), (rel.address or "").lower()):
+                return rel
+        for rel in rels:
+            if q in rel.name.lower() or q in (rel.address or "").lower() or q in rel.relation.lower():
+                return rel
+        return None
+
+    # --------------------------------------------------------------- key/value
+    def get_kv(self, key: str, default: str | None = None) -> str | None:
+        row = self._exec("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else default
+
+    def set_kv(self, key: str, value: str) -> None:
+        self._exec(
+            "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+
+    def get_flag(self, key: str, default: bool) -> bool:
+        v = self.get_kv(key)
+        return default if v is None else v == "1"
+
+    def set_flag(self, key: str, value: bool) -> None:
+        self.set_kv(key, "1" if value else "0")
+
+    def last_greeting_at(self, relative_id: str) -> float | None:
+        row = self._exec(
+            "SELECT MAX(created_at) AS t FROM messages WHERE relative_id=? AND sender='assistant' AND kind='greeting'",
+            (relative_id,),
+        ).fetchone()
+        return row["t"] if row and row["t"] is not None else None
+
+    def last_contact_at(self, relative_id: str) -> float | None:
+        """Last message in either direction."""
+        row = self._exec("SELECT MAX(created_at) AS t FROM messages WHERE relative_id=?", (relative_id,)).fetchone()
+        return row["t"] if row and row["t"] is not None else None
 
     # ------------------------------------------------------------ short-term memory
     def add_message(

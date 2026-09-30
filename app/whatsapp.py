@@ -109,7 +109,7 @@ class WhatsAppClient:
     def _base(self) -> str:
         return f"{GRAPH_URL}/{self.settings.whatsapp_api_version}"
 
-    async def send_text(self, to: str, text: str) -> str | None:
+    async def send_text(self, to: str, text: str, quote_id: str | None = None) -> str | None:
         """Send a text message. Returns the WhatsApp message id."""
         url = f"{self._base}/{self.settings.whatsapp_phone_number_id}/messages"
         body = {

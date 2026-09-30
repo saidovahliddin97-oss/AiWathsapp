@@ -37,7 +37,8 @@ def payload(mid="wamid.X", text="Салом", phone="992900000001", mtype="text"
 @pytest.fixture
 def client():
     s = Settings(_env_file=None, anthropic_api_key="", dry_run=True, whatsapp_verify_token="vt",
-                 whatsapp_app_secret="appsecret", database_path=":memory:")
+                 whatsapp_app_secret="appsecret", database_path=":memory:",
+                 greetings_enabled=False, bridge_token="bt")
     store = Store(":memory:")
     store.upsert_relative(Relative(id="mom", phone="992900000001", name="Модар", relation="mother",
                                    age_group=AgeGroup.ELDER, address="Модарҷон"))
@@ -46,6 +47,7 @@ def client():
     main.app.state.settings = s
     main.app.state.store = store
     main.app.state.whatsapp = None
+    main.app.state.sender = sender
     main.app.state.assistant = Assistant(s, store, gen, sender)
     main.app.state.demo_assistant = Assistant(s, store, gen, DryRunSender())
     with TestClient(main.app) as c:
@@ -104,3 +106,11 @@ def test_health_and_demo(client):
     r = client.post("/demo/api/message", json={"relative_id": "mom", "text": "Салом"})
     assert r.json()["status"] == "dry_run"
     assert client.sender.sent == []  # demo never uses the real sender
+
+
+def test_bridge_incoming(client):
+    body = {"message_id": "B1", "phone": "992900000001", "chat_id": "992900000001@s.whatsapp.net", "text": "Салом"}
+    assert client.post("/bridge/incoming", json=body).status_code == 401
+    r = client.post("/bridge/incoming", json=body, headers={"x-bridge-token": "bt"})
+    assert r.status_code == 200
+    assert client.sender.sent == [("992900000001", "Хуб, Модарҷон!")]

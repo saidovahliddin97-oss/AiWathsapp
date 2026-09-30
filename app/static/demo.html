@@ -61,7 +61,7 @@ const api=(p,o={})=>fetch(p,{...o,headers:{'Content-Type':'application/json','X-
 const QUICK=["Ассалому алейкум, писарам! Чӣ хел ҳастӣ?","Ту ба хона расидӣ?","Кай ба Душанбе меоӣ?","Хабари хуш! Нигина ба донишгоҳ дохил шуд!","Бобоят каме бемор шуд, дар беморхона аст.","Шумо дар куҷо ҳастед ҳозир?","ок","Ҳа-ҳа, ту ҳамеша ҳамин хел мегӯӣ 😄"];
 function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 async function load(){try{state=await api('/demo/api/state')}catch(e){$('#rels').innerHTML='<p class="info" style="color:var(--warn)">'+esc(e.message)+'</p>';return}
- const h=state.health;$('#mode').textContent='Claude: '+h.claude+' · WA: '+h.whatsapp;$('#mode').className='badge'+(h.claude==='api'?'':' warn');
+ const h=state.health;$('#mode').textContent='LLM: '+h.llm+' · WA: '+h.whatsapp;$('#mode').className='badge'+(h.llm==='offline-demo'?' warn':'');
  $('#rels').innerHTML=state.relatives.map(r=>`<div class="rel${cur&&cur.id===r.id?' active':''}" data-id="${r.id}"><b>${esc(r.address||r.name)}</b><small>${r.relation} · ${r.age_group} · ${r.mode}</small></div>`).join('');
  document.querySelectorAll('.rel').forEach(el=>el.onclick=()=>select(el.dataset.id));
  $('#quick').innerHTML=QUICK.map(q=>`<button type="button">${esc(q)}</button>`).join('');

@@ -85,6 +85,7 @@ RELATION_HINTS = {
     "sister": "хоҳар (older: апа + Шумо; younger: ту is fine)",
     "brother": "бародар (older: ака + Шумо; younger: ту is fine)",
     "friend": "дӯст (usually ту)",
+    "family_group": "family group chat: reply to group_speaker, short; use Шумо for elders",
 }
 
 
@@ -97,6 +98,8 @@ def build_context(
     incoming_text: str | None = None,
     recent_greetings: list[str] | None = None,
     media_note: str | None = None,
+    speaker: Relative | None = None,
+    speaker_name: str | None = None,
 ) -> dict[str, Any]:
     """Build the minimal structured context Claude needs (no phone numbers or IDs
     beyond the relative's opaque id)."""
@@ -124,6 +127,12 @@ def build_context(
         ctx["incoming_message"] = incoming.text
     if media_note:
         ctx["incoming_media"] = media_note
+    if speaker is not None or speaker_name:
+        ctx["group_speaker"] = {
+            "name": speaker_name or (speaker.name if speaker else None),
+            "relation": speaker.relation if speaker else "unknown",
+            "age_group": speaker.age_group.value if speaker else "unknown",
+        }
     return ctx
 
 

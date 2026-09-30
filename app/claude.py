@@ -152,9 +152,24 @@ class OfflineGenerator:
 
 
 def build_generator(settings: Settings) -> ReplyGenerator | None:
-    if settings.claude_enabled:
+    provider = settings.llm_provider.lower()
+    if provider == "auto":
+        provider = "claude" if settings.claude_enabled else "gemini" if settings.gemini_enabled else "offline"
+    if provider == "claude" and settings.claude_enabled:
         return ClaudeClient(settings)
+    if provider == "gemini" and settings.gemini_enabled:
+        from app.gemini import GeminiClient
+
+        return GeminiClient(settings)
     if settings.allow_offline_generator:
-        log.warning("ANTHROPIC_API_KEY is not set - using the OFFLINE demo generator")
+        log.warning("No LLM API key configured - using the OFFLINE demo generator")
         return OfflineGenerator()
     return None
+
+
+def generator_name(generator: object | None) -> str:
+    return {
+        "ClaudeClient": "claude",
+        "GeminiClient": "gemini",
+        "OfflineGenerator": "offline-demo",
+    }.get(type(generator).__name__, "disabled")

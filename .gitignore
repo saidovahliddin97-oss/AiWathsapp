@@ -7,3 +7,6 @@ venv/
 database/*.db
 database/*.db-*
 config/relatives.json
+bridge/node_modules/
+bridge/auth/
+database/*.log
