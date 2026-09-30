@@ -34,14 +34,22 @@ if ! grep -qE '^BRIDGE_TOKEN=.+' .env; then
   if grep -q '^BRIDGE_TOKEN=' .env; then sed -i '' "s/^BRIDGE_TOKEN=.*/BRIDGE_TOKEN=$TOKEN/" .env; else echo "BRIDGE_TOKEN=$TOKEN" >> .env; fi
 fi
 
-if ! grep -qE '^(GEMINI_API_KEY|ANTHROPIC_API_KEY)=.+' .env; then
-  say_step "Нужен ключ модели"
-  echo "1) Откроется страница Google AI Studio — нажмите «Create API key» и скопируйте ключ."
-  echo "2) Откроется файл настроек .env — вставьте ключ после GEMINI_API_KEY= и сохраните (Cmd+S)."
-  echo "   Там же заполните OWNER_PHONE (ваш личный номер без +) и OWNER_NAMES (ваше имя)."
-  open "https://aistudio.google.com/apikey"
-  open -e .env
-  read -r -p "Когда сохраните файл — нажмите Enter..."
+set_env() {  # set_env KEY VALUE  -> writes/replaces the line in .env
+  if grep -q "^$1=" .env; then sed -i '' "s|^$1=.*|$1=$2|" .env; else printf "\n%s=%s\n" "$1" "$2" >> .env; fi
+}
+if ! grep -qE '^(OPENROUTER_API_KEY|ANTHROPIC_API_KEY)=.+' .env; then
+  say_step "Нужен бесплатный ключ OpenRouter (один раз)"
+  echo "1) Откроется openrouter.ai — войдите (можно через Google) и нажмите «Create API Key»."
+  echo "2) Скопируйте ключ (начинается с sk-or-), вставьте сюда (Cmd+V) и нажмите Enter."
+  echo "   Карта и оплата не нужны: бот использует только бесплатные модели."
+  open "https://openrouter.ai/keys"
+  read -r -p "Ключ: " OR_KEY
+  OR_KEY=$(printf "%s" "$OR_KEY" | tr -d '[:space:]"')
+  if [ -n "$OR_KEY" ]; then set_env OPENROUTER_API_KEY "$OR_KEY"; echo "✓ Ключ сохранён."; fi
+fi
+if ! grep -qE '^OWNER_NAMES=.+' .env; then
+  read -r -p "Как вас зовут (для общих групп, можно несколько через запятую): " NAMES
+  [ -n "$NAMES" ] && set_env OWNER_NAMES "$NAMES"
 fi
 
 if [ ! -f config/relatives.json ]; then

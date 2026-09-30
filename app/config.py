@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     # LLM provider: auto | claude | gemini | offline
     # auto = Claude if ANTHROPIC_API_KEY is set, else Gemini if GEMINI_API_KEY is set, else offline demo
     llm_provider: str = "auto"
+    # OpenRouter: free models, works where Gemini/Claude are blocked. https://openrouter.ai/keys
+    openrouter_api_key: SecretStr = SecretStr("")
+    openrouter_model: str = "auto"  # auto = best currently-free models; or comma-separated ids
     gemini_api_key: SecretStr = SecretStr("")
     gemini_model: str = "gemini-flash-latest"
 
@@ -103,6 +106,10 @@ class Settings(BaseSettings):
         )
 
     @property
+    def openrouter_enabled(self) -> bool:
+        return bool(self.openrouter_api_key.get_secret_value())
+
+    @property
     def gemini_enabled(self) -> bool:
         return bool(self.gemini_api_key.get_secret_value())
 
@@ -137,5 +144,6 @@ if __name__ == "__main__":  # python -m app.config  -> check .env in plain words
             print(f"✖ В файле .env неверное значение {name}={err.get('input')!r}: {err['msg']}")
         print("  Для true/false пишите только true или false; номер телефона — в OWNER_PHONE.")
         sys.exit(1)
-    llm = "Claude" if s.claude_enabled else "Gemini" if s.gemini_enabled else "нет ключа (демо-режим)"
+    llm = ("Claude" if s.claude_enabled else "OpenRouter (бесплатные модели)" if s.openrouter_enabled
+           else "Gemini" if s.gemini_enabled else "нет ключа (демо-режим)")
     print(f"✓ Настройки в порядке. Модель: {llm}. Личный номер: {'да' if s.personal_number else 'нет'}.")

@@ -21,6 +21,9 @@ not a developer: explain in Russian, short, and do the work yourself.
   `/удалить <имя>`, `/авто вкл|выкл [имя]`, `/группы`, `/группа вкл|выкл <название>`, `/привет имя|всем`, `/пауза N`, `/старт`, `/почему` (explains the last decisions).
 - Groups are ignored unless enabled with `/группа вкл`. Modes set by commands persist across restarts.
 
+- LLM: `LLM_PROVIDER=auto` picks Claude > OpenRouter (free models, `OPENROUTER_MODEL=auto`) > Gemini.
+  The owner is in Russia: Gemini/Claude APIs are geo-blocked there, OpenRouter free models are the default. Must stay free.
+
 ## Common problems
 - `.env` booleans must be `true`/`false`; phone numbers without `+` go to `OWNER_PHONE`.
 - TextEdit smart quotes in `relatives.json` are auto-repaired; other JSON errors are reported with line numbers.

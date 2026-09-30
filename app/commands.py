@@ -76,7 +76,7 @@ async def handle_command(assistant: "Assistant", text: str) -> str | None:
     parts = text[1:].split()
     if not parts:
         return HELP
-    cmd = ALIASES.get(parts[0].lower())
+    cmd = ALIASES.get(parts[0].lower().strip("?!.,:;"))
     args = parts[1:]
     store = assistant.store
 

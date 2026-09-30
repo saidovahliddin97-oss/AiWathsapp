@@ -154,9 +154,18 @@ class OfflineGenerator:
 def build_generator(settings: Settings) -> ReplyGenerator | None:
     provider = settings.llm_provider.lower()
     if provider == "auto":
-        provider = "claude" if settings.claude_enabled else "gemini" if settings.gemini_enabled else "offline"
+        provider = (
+            "claude" if settings.claude_enabled
+            else "openrouter" if settings.openrouter_enabled
+            else "gemini" if settings.gemini_enabled
+            else "offline"
+        )
     if provider == "claude" and settings.claude_enabled:
         return ClaudeClient(settings)
+    if provider == "openrouter" and settings.openrouter_enabled:
+        from app.openrouter import OpenRouterClient
+
+        return OpenRouterClient(settings)
     if provider == "gemini" and settings.gemini_enabled:
         from app.gemini import GeminiClient
 
@@ -171,5 +180,6 @@ def generator_name(generator: object | None) -> str:
     return {
         "ClaudeClient": "claude",
         "GeminiClient": "gemini",
+        "OpenRouterClient": "openrouter (бесплатно)",
         "OfflineGenerator": "offline-demo",
     }.get(type(generator).__name__, "disabled")

@@ -276,3 +276,8 @@ async def test_retryable_failure_notifies_owner(personal, store):
     a = make_assistant(personal, store, FakeGenerator(error=GenerationError("Gemini API error 429", retryable=True)), sender)
     await a.process(IncomingMessage(message_id="m1", phone=MOM, text="Салом"))
     assert any("429" in t for to, t in sender.sent if to == "me")
+
+
+async def test_command_with_question_mark(personal, store):
+    a = make_assistant(personal, store, FakeGenerator())
+    assert "ещё не получил" in (await a.process(owner_cmd("/почему?", "c1"))).reply

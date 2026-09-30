@@ -51,7 +51,19 @@ class GeminiClient:
                     raise GenerationError("Gemini API key rejected - check GEMINI_API_KEY")
                 if resp.status_code == 404:
                     raise GenerationError(f"Gemini model {self.settings.gemini_model!r} not found - check GEMINI_MODEL")
-                err = GenerationError(f"Gemini API error {resp.status_code}", retryable=resp.status_code in RETRYABLE)
+                message = ""
+                try:
+                    message = str((resp.json().get("error") or {}).get("message", ""))
+                except ValueError:
+                    pass
+                if "location is not supported" in message.lower():
+                    raise GenerationError("Gemini недоступен в вашей стране - используйте OPENROUTER_API_KEY")
+                if "api key not valid" in message.lower():
+                    raise GenerationError("Gemini API key rejected - check GEMINI_API_KEY")
+                err = GenerationError(
+                    f"Gemini API error {resp.status_code} {message[:120]}".strip(),
+                    retryable=resp.status_code in RETRYABLE,
+                )
                 if not err.retryable:
                     raise err
             if attempt < attempts - 1:

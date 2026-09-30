@@ -130,7 +130,7 @@ class Assistant:
         self._last_draft = ""
         for _ in range(MAX_GENERATION_ATTEMPTS):
             draft = await self.generator.generate(context, feedback)  # may raise GenerationError
-            result = validate_reply(draft, mode, facts)
+            result = validate_reply(draft, mode, facts, incoming=context.get("incoming_message"))
             if result.ok:
                 return result.text, None
             self._last_draft = result.text

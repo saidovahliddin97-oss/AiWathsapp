@@ -98,7 +98,9 @@ def count_emoji(text: str) -> int:
     return len(_EMOJI_RE.findall(text))
 
 
-def validate_reply(text: str, mode: Mode, facts: list[Fact] | None = None) -> ValidationResult:
+def validate_reply(
+    text: str, mode: Mode, facts: list[Fact] | None = None, incoming: str | None = None
+) -> ValidationResult:
     t = clean_reply(text)
     problems: list[str] = []
 
@@ -110,8 +112,11 @@ def validate_reply(text: str, mode: Mode, facts: list[Fact] | None = None) -> Va
         problems.append(f"contains technical/meta content ({leak.group(0)!r})")
 
     cyr, lat = len(_CYR_RE.findall(t)), len(_LAT_RE.findall(t))
-    if cyr == 0 or lat > cyr * 0.2:
-        problems.append("must be written in Tajik Cyrillic")
+    in_cyr = len(_CYR_RE.findall(incoming or ""))
+    in_lat = len(_LAT_RE.findall(incoming or ""))
+    latin_chat = in_lat > max(in_cyr, 3)  # the relative writes in a Latin-script language
+    if not latin_chat and (cyr == 0 or lat > cyr * 0.2):
+        problems.append("must be written in Tajik Cyrillic (or Russian if the relative writes Russian)")
 
     if len(t) > MAX_CHARS[mode]:
         problems.append(f"too long ({len(t)} chars, max {MAX_CHARS[mode]})")
